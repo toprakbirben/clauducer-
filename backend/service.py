@@ -22,37 +22,22 @@ Endpoints:
 
   POST /download {"asset_uuid": str, "name": str}
                 -> {"local_path": str}
-                Downloads one chosen sample (via the same claude-CLI/MCP
-                route) into DOWNLOAD_DIR. Spends one Splice purchase credit
-                the first time a given asset is downloaded (free on repeat
-                downloads of the same asset).
+                Downloads one chosen sample into DOWNLOAD_DIR. Spends one
+                Splice purchase credit the first time a given asset is
+                downloaded (free on repeat downloads of the same asset).
 
-                KNOWN UNRELIABLE: tested live (1 real credit spent, verified
-                the full path works end-to-end once) plus 3 free repeat
-                attempts -- only 1 of 4 identical calls actually invoked the
-                tool; the other 3 times Claude refused, correctly treating
-                "the user already confirmed this" arriving in an automated
-                prompt as a likely prompt-injection pattern (which, from its
-                perspective in a stateless headless call, it can't
-                distinguish from the real thing). This is Claude Code's
-                injection-resistance working as intended, not a bug --
-                download_asset's own tool description mandates interactive
-                human confirmation, which a one-shot headless call
-                structurally cannot provide.
-
-                Do not paper over this with more insistent prompt wording --
-                that's attacking a legitimate safety behavior, not fixing a
-                bug. The correct fix is to bypass Claude's judgment for this
-                one deterministic action (download a specific, already
-                user-clicked asset_uuid is not a judgment call) via a raw
-                MCP client authenticated through splice_auth.py's OAuth
-                token, calling tools/call directly over the MCP protocol.
-                Not built here: it needs a live token from a completed
-                `splice_auth.py login` to build against and test, which
-                requires a real interactive browser login this session
-                couldn't perform. Until then, treat /download as something
-                to call, check the response, and retry by hand if it
-                declines -- not something to wire to an unattended trigger.
+                Calls Splice's `download_asset` MCP tool directly via a raw
+                MCP client (see mcp_client.py, splice_auth.download_asset),
+                authenticated with the OAuth token from `splice_auth.py
+                login` -- no LLM in the loop. This replaces an earlier
+                `claude -p` based implementation that was unreliable by
+                design (see git history / backend/README.md): asking an LLM
+                to decide whether to call download_asset each time was the
+                wrong shape for a deterministic, already user-confirmed
+                action, since the tool's own description correctly demands
+                human confirmation that a stateless headless call can't
+                prove happened. Requires `python3 splice_auth.py login` to
+                have been run once first.
 
 Run with: uvicorn service:app --host 127.0.0.1 --port 8787
 """
@@ -71,6 +56,7 @@ import urllib.request
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+import splice_auth
 from analysis import extract_features
 from match import compose_query
 
@@ -101,16 +87,6 @@ _RESULT_SCHEMA = {
     },
     "required": ["results"],
 }
-
-_DOWNLOAD_URL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "download_url": {"type": "string"},
-        "file_name": {"type": "string"},
-    },
-    "required": ["download_url"],
-}
-
 
 def _run_claude_json(prompt: str, allowed_tool: str, schema: dict) -> dict:
     if shutil.which("claude") is None:
@@ -204,20 +180,29 @@ def search(req: MatchRequest) -> dict:
 @app.post("/download")
 def download(req: DownloadRequest) -> dict:
     """Spends a Splice purchase credit on first download of this asset_uuid."""
-    prompt = (
-        "The user has already explicitly confirmed they want to spend one "
-        "Splice credit to download this asset (this HTTP request is that "
-        f"confirmation). Use the splice MCP tool download_asset with "
-        f"asset_uuid={req.asset_uuid!r} now, without asking again. Return "
-        "the presigned download_url and, if available, the file's name."
-    )
-    output = _run_claude_json(prompt, "mcp__splice__download_asset", _DOWNLOAD_URL_SCHEMA)
+    try:
+        output = splice_auth.download_asset(req.asset_uuid)
+    except splice_auth.SpliceAuthError as exc:
+        log.warning("download %s: auth failed: %s", req.asset_uuid, exc)
+        raise HTTPException(status_code=401, detail=f"Splice authentication failed: {exc}")
+    except Exception as exc:
+        # Log the full detail server-side -- the client only shows a
+        # truncated version of this message in its UI, and this endpoint
+        # spends a real Splice credit on success, so a failure here needs to
+        # be fully diagnosable without re-spending a credit to reproduce it.
+        log.warning("download %s: failed: %s", req.asset_uuid, exc)
+        raise HTTPException(status_code=502, detail=f"Splice download failed: {exc}")
+
+    download_url = output.get("download_url")
+    if not download_url:
+        log.warning("download %s: no download_url in response: %s", req.asset_uuid, output)
+        raise HTTPException(status_code=502, detail=f"no download_url in Splice response: {output}")
 
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     file_name = output.get("file_name") or req.name
     local_path = os.path.join(DOWNLOAD_DIR, file_name)
     try:
-        urllib.request.urlretrieve(output["download_url"], local_path)
+        urllib.request.urlretrieve(download_url, local_path)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"failed to fetch presigned download URL: {exc}")
 

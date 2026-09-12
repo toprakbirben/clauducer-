@@ -1,0 +1,181 @@
+#include "ResultsListComponent.h"
+
+// --- ResultRow -----------------------------------------------------------
+
+class ResultsListComponent::ResultRow : public juce::Component
+{
+public:
+    ResultRow(ResultsListComponent& ownerIn) : owner(ownerIn)
+    {
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+    }
+
+    void setRowIndex(int newIndex, const BackendClient::SearchResult* result)
+    {
+        rowIndex = newIndex;
+        if (result != nullptr)
+        {
+            nameText = result->name;
+            metaText = juce::String(result->bpm, 0) + " BPM   " + result->key;
+        }
+        repaint();
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        g.fillAll(juce::Colours::transparentBlack);
+
+        auto area = getLocalBounds().reduced(8, 6);
+
+        g.setColour(juce::Colours::white);
+        g.setFont(juce::Font(14.0f, juce::Font::bold));
+        g.drawFittedText(nameText, area.removeFromTop(area.getHeight() * 2 / 3),
+                          juce::Justification::centredLeft, 1);
+
+        // Split before drawing either, so the hint can never overlap the
+        // meta text even on a narrow row.
+        auto hintArea = area.removeFromRight(110);
+
+        g.setColour(juce::Colours::lightgrey);
+        g.setFont(juce::Font(12.0f));
+        g.drawFittedText(metaText, area, juce::Justification::centredLeft, 1);
+
+        // Discoverability hint: dragging the row onto an Ableton track
+        // downloads it (spending a Splice credit) -- not obvious just from
+        // the cursor alone, so spell it out.
+        g.setColour(juce::Colours::grey);
+        g.setFont(juce::Font(11.0f, juce::Font::italic));
+        g.drawFittedText(juce::CharPointer_UTF8("drag to add \xe2\x86\x92"), hintArea,
+                          juce::Justification::centredRight, 1);
+
+        g.setColour(juce::Colour(0xff262b3d));
+        g.drawLine(0.0f, static_cast<float>(getHeight() - 1), static_cast<float>(getWidth()), static_cast<float>(getHeight() - 1));
+    }
+
+    void mouseDown(const juce::MouseEvent& e) override
+    {
+        dragStartPos = e.getPosition();
+        dragStarted = false;
+    }
+
+    void mouseDrag(const juce::MouseEvent& e) override
+    {
+        if (dragStarted)
+            return;
+
+        // A small threshold so a plain click doesn't also register as a drag.
+        if (e.getPosition().getDistanceFrom(dragStartPos) > 8)
+        {
+            dragStarted = true;
+            owner.startDragForRow(rowIndex, this);
+        }
+    }
+
+    void mouseUp(const juce::MouseEvent&) override
+    {
+        // A plain click (mouse went up without ever crossing the drag
+        // threshold above) opens the sound's Splice webpage instead.
+        if (!dragStarted)
+            owner.openWebpageForRow(rowIndex);
+    }
+
+private:
+    ResultsListComponent& owner;
+    juce::String nameText, metaText;
+    int rowIndex = -1;
+    juce::Point<int> dragStartPos;
+    bool dragStarted = false;
+};
+
+// --- ResultsListComponent -------------------------------------------------
+
+ResultsListComponent::ResultsListComponent(ClauducerAudioProcessor& processorIn) : processor(processorIn)
+{
+    addAndMakeVisible(listBox);
+    listBox.setRowHeight(48);
+    listBox.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff0b0d14));
+}
+
+void ResultsListComponent::setResults(std::vector<BackendClient::SearchResult> newResults)
+{
+    results = std::move(newResults);
+    listBox.updateContent();
+    listBox.repaint();
+}
+
+void ResultsListComponent::resized()
+{
+    listBox.setBounds(getLocalBounds());
+}
+
+int ResultsListComponent::getNumRows()
+{
+    return static_cast<int>(results.size());
+}
+
+void ResultsListComponent::paintListBoxItem(int, juce::Graphics& g, int width, int height, bool rowIsSelected)
+{
+    g.fillAll(rowIsSelected ? juce::Colours::darkgrey : juce::Colours::black);
+    juce::ignoreUnused(width, height);
+}
+
+juce::Component* ResultsListComponent::refreshComponentForRow(int rowNumber, bool, juce::Component* existingComponentToUpdate)
+{
+    auto* row = dynamic_cast<ResultRow*>(existingComponentToUpdate);
+    if (row == nullptr)
+    {
+        delete existingComponentToUpdate;
+        row = new ResultRow(*this);
+    }
+
+    const auto* result = (rowNumber >= 0 && rowNumber < static_cast<int>(results.size())) ? &results[static_cast<size_t>(rowNumber)] : nullptr;
+    row->setRowIndex(rowNumber, result);
+    return row;
+}
+
+void ResultsListComponent::startDragForRow(int row, juce::Component* dragSourceComponent)
+{
+    if (row < 0 || row >= static_cast<int>(results.size()))
+        return;
+
+    const auto& result = results[static_cast<size_t>(row)];
+
+    auto* container = juce::DragAndDropContainer::findParentDragContainerFor(dragSourceComponent);
+    if (container == nullptr)
+        return; // editor isn't a DragAndDropContainer -- see PluginEditor
+
+    juce::String localPath;
+    auto cached = downloadedPathsByAssetUuid.find(result.assetUuid);
+    if (cached != downloadedPathsByAssetUuid.end())
+    {
+        localPath = cached->second;
+    }
+    else
+    {
+        // Blocking on the message thread: deliberate -- the credit spend
+        // and the drag start need to happen as one atomic user gesture, and
+        // this call is expected to complete in well under a second against
+        // a local backend. A future version could show a spinner if this
+        // turns out to be too slow in practice.
+        auto result_ = processor.downloadForDrag(result.assetUuid, result.name, localPath);
+        if (result_.failed())
+        {
+            if (onDragError)
+                onDragError(result_.getErrorMessage());
+            return;
+        }
+        downloadedPathsByAssetUuid[result.assetUuid] = localPath;
+    }
+
+    container->performExternalDragDropOfFiles({ localPath }, false, dragSourceComponent);
+}
+
+void ResultsListComponent::openWebpageForRow(int row)
+{
+    if (row < 0 || row >= static_cast<int>(results.size()))
+        return;
+
+    const auto& link = results[static_cast<size_t>(row)].link;
+    if (link.isNotEmpty())
+        juce::URL(link).launchInDefaultBrowser();
+}

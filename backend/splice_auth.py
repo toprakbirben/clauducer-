@@ -34,6 +34,8 @@ import urllib.parse
 import urllib.request
 import webbrowser
 
+from mcp_client import MCPAuthError, MCPClient, extract_tool_result
+
 ISSUER = "https://mcp.splice.com"
 CALLBACK_PORT = 3119  # distinct from the port Claude Code's own flow uses (3118)
 REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/callback"
@@ -187,6 +189,41 @@ def get_access_token() -> str:
     if expires_in is not None and time.time() > tokens["obtained_at"] + expires_in - 60:
         tokens = refresh()
     return tokens["access_token"]
+
+
+class SpliceAuthError(Exception):
+    """The access token was rejected even after a refresh attempt."""
+
+
+def download_asset(asset_uuid: str) -> dict:
+    """Call Splice's `download_asset` MCP tool directly -- no LLM in the loop.
+
+    Deterministic replacement for shelling out to `claude -p` for /download
+    (see backend/README.md, "/download is unreliable"): downloading a
+    specific, already user-clicked asset_uuid is not a judgment call, so it
+    doesn't need one made by an LLM each time.
+
+    Retries once after a token refresh if the server rejects the current
+    access token (401), since a token can go stale between requests.
+    """
+    token = get_access_token()
+    try:
+        client = MCPClient(f"{ISSUER}/mcp", token)
+        client.initialize()
+        result = client.call_tool("download_asset", {"asset_uuid": asset_uuid})
+    except MCPAuthError:
+        try:
+            token = refresh()["access_token"]
+        except Exception as exc:
+            raise SpliceAuthError(f"token refresh failed: {exc}") from exc
+        client = MCPClient(f"{ISSUER}/mcp", token)
+        client.initialize()
+        try:
+            result = client.call_tool("download_asset", {"asset_uuid": asset_uuid})
+        except MCPAuthError as exc:
+            raise SpliceAuthError(f"still unauthorized after refresh: {exc}") from exc
+
+    return extract_tool_result(result)
 
 
 if __name__ == "__main__":
