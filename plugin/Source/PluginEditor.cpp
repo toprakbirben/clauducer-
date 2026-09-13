@@ -23,6 +23,7 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     promptEditor.setColour(juce::TextEditor::outlineColourId, kFieldBorder);
     promptEditor.setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xff6f9dff));
     promptEditor.setColour(juce::TextEditor::textColourId, juce::Colours::white);
+    promptEditor.onTextChange = [this] { captureButton.setLocked(false); };
     addAndMakeVisible(promptEditor);
 
     captureButton.onClick = [this] { onCaptureButtonClicked(); };

@@ -1,80 +1,57 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_opengl/juce_opengl.h>
+#include <atomic>
+#include <memory>
 
-/** The big circular "Capture & Search" button: a glowing orb that pulses
-    gently at rest and animates a rotating arc + "Searching..." label while
-    a search is in flight. Original design (not a copy of any reference
-    image) -- captures a round, glowing, jewel-like feel via layered
-    radial gradients and an animated stroke, done entirely with JUCE's
-    Graphics API (no image assets).
+class RippleSphere;
+
+/** The big circular "Capture & Search" button. Renders a RippleSphere (see
+    RippleSphere.h/.cpp) through a fixed, front-on orthographic camera, so it
+    reads as a flat glowing circular disc rather than a 3D ball -- ripples
+    animate gently at rest and speed up while a search is in flight.
 */
-class CircularCaptureButton : public juce::Component, private juce::Timer
+class CircularCaptureButton : public juce::Component, private juce::OpenGLRenderer
 {
 public:
+    CircularCaptureButton();
+    ~CircularCaptureButton() override;
+
     std::function<void()> onClick;
 
-    void setAnimating(bool shouldAnimate)
-    {
-        animating = shouldAnimate;
-        if (animating)
-            startTimerHz(30);
-        else
-            stopTimer();
-        repaint();
-    }
+    void setAnimating(bool shouldAnimate);
 
-    void paint(juce::Graphics& g) override
-    {
-        auto bounds = getLocalBounds().toFloat().reduced(4.0f);
-        const float radius = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
-        const auto centre = bounds.getCentre();
+    // While locked, clicking no longer moves the ripple's origin or adds a
+    // splash -- the idle/searching animation itself keeps running as normal.
+    // Set true once the user clicks the button; call setLocked(false) when a
+    // new prompt is entered to let clicks affect the ripple again.
+    void setLocked(bool shouldLock);
 
-        // Outer glow.
-        juce::ColourGradient glow(juce::Colour(0xff6f9dff).withAlpha(0.35f), centre,
-                                   juce::Colour(0xff6f9dff).withAlpha(0.0f), centre.translated(radius, 0.0f), true);
-        g.setGradientFill(glow);
-        g.fillEllipse(bounds);
-
-        // Core orb, breathing slightly at rest and shrinking a touch while animating.
-        const float breathe = 0.03f * std::sin(phase * (animating ? 3.0f : 1.0f));
-        auto orbBounds = bounds.reduced(radius * (0.12f - breathe));
-        juce::ColourGradient orbGradient(juce::Colour(0xffeaf1ff), orbBounds.getCentre().translated(-radius * 0.25f, -radius * 0.25f),
-                                          juce::Colour(0xff283968), orbBounds.getCentre().translated(radius * 0.35f, radius * 0.35f), true);
-        g.setGradientFill(orbGradient);
-        g.fillEllipse(orbBounds);
-
-        if (animating)
-        {
-            juce::Path arc;
-            const float startAngle = phase;
-            arc.addArc(bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight(),
-                       startAngle, startAngle + juce::MathConstants<float>::pi * 0.7f, true);
-            g.setColour(juce::Colours::white.withAlpha(0.85f));
-            g.strokePath(arc, juce::PathStrokeType(3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
-
-        g.setColour(juce::Colours::white);
-        g.setFont(juce::Font(15.0f, juce::Font::bold));
-        g.drawFittedText(animating ? "Searching..." : "Click to\nFind",
-                          bounds.toNearestInt(), juce::Justification::centred, 2);
-    }
-
-    void mouseUp(const juce::MouseEvent&) override
-    {
-        if (onClick && !animating)
-            onClick();
-    }
+    void paint(juce::Graphics&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseUp(const juce::MouseEvent&) override;
 
 private:
-    void timerCallback() override
-    {
-        phase += 0.12f;
-        if (phase > juce::MathConstants<float>::twoPi)
-            phase -= juce::MathConstants<float>::twoPi;
-        repaint();
-    }
+    // juce::OpenGLRenderer
+    void newOpenGLContextCreated() override;
+    void renderOpenGL() override;
+    void openGLContextClosing() override;
 
-    bool animating = false;
-    float phase = 0.0f;
+    juce::OpenGLContext glContext;
+    std::unique_ptr<RippleSphere> sphere;
+    std::atomic<bool> animating { false };
+    double lastRenderTimeMs = 0.0;
+
+    // Where the ripple originates -- a point on the sphere's visible
+    // hemisphere, set from wherever the user last clicked (see mouseDown).
+    // Defaults to the tuned upper-left touch point until the first click.
+    std::atomic<float> rippleX { -0.706f }, rippleY { 0.709f }, rippleZ { 0.990f };
+
+    // A brief amplitude boost that decays after each click, so a new ripple
+    // reads as a fresh splash rather than the pattern silently recentring.
+    std::atomic<double> clickPulseStartMs { -1.0e15 };
+
+    // See setLocked().
+    std::atomic<bool> locked { false };
 };

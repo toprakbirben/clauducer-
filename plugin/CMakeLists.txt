@@ -32,6 +32,8 @@ target_sources(Clauducer PRIVATE
     Source/PluginEditor.cpp
     Source/ResultsListComponent.cpp
     Source/BackendClient.cpp
+    Source/CircularCaptureButton.cpp
+    Source/RippleSphere.cpp
 )
 
 target_compile_definitions(Clauducer PUBLIC
@@ -43,6 +45,7 @@ target_compile_definitions(Clauducer PUBLIC
 target_link_libraries(Clauducer PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
+    juce::juce_opengl
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
