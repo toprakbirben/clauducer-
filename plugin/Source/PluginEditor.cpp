@@ -1,10 +1,12 @@
 #include "PluginEditor.h"
+#include "BackgroundGradient.h"
+#include "AppFont.h"
 
 namespace
 {
-    const juce::Colour kBackground { 0xff0b0d14 };
-    const juce::Colour kFieldBackground { 0xff1b2030 };
-    const juce::Colour kFieldBorder { 0xff333b52 };
+    const juce::Colour kFieldBackground { 0xffeceff6 };
+    const juce::Colour kFieldBorder { 0xffd7dbe8 };
+    const juce::Colour kTextPrimary { 0xff1c2030 };
     constexpr int kAnimationMs = 320;
 }
 
@@ -13,22 +15,24 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
 {
     audioProcessor.addSearchListener(this);
 
-    promptLabel.setFont(juce::Font(15.0f, juce::Font::bold));
-    promptLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    promptLabel.setFont(appFont(22.0f));
+    promptLabel.setColour(juce::Label::textColourId, kTextPrimary);
     addAndMakeVisible(promptLabel);
 
     promptEditor.setMultiLine(false);
-    promptEditor.setTextToShowWhenEmpty("e.g. a warm layering pad to sit under this vocal", juce::Colours::grey);
+    promptEditor.setLookAndFeel(&promptEditorLookAndFeel);
+    promptEditor.setFont(appFont(17.0f));
     promptEditor.setColour(juce::TextEditor::backgroundColourId, kFieldBackground);
     promptEditor.setColour(juce::TextEditor::outlineColourId, kFieldBorder);
     promptEditor.setColour(juce::TextEditor::focusedOutlineColourId, juce::Colour(0xff6f9dff));
-    promptEditor.setColour(juce::TextEditor::textColourId, juce::Colours::white);
+    promptEditor.setColour(juce::TextEditor::textColourId, kTextPrimary);
     promptEditor.onTextChange = [this] { captureButton.setLocked(false); };
     addAndMakeVisible(promptEditor);
 
     captureButton.onClick = [this] { onCaptureButtonClicked(); };
     addAndMakeVisible(captureButton);
 
+    statusLabel.setFont(appFont(14.0f));
     statusLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(statusLabel);
 
@@ -49,7 +53,7 @@ ClauducerAudioProcessorEditor::~ClauducerAudioProcessorEditor()
 
 void ClauducerAudioProcessorEditor::paint(juce::Graphics& g)
 {
-    g.fillAll(kBackground);
+    paintAIGradientBackground(g, getLocalBounds().toFloat(), getLocalBounds().toFloat(), {});
 }
 
 void ClauducerAudioProcessorEditor::resized()
@@ -74,17 +78,23 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
 {
     focusedView = shouldFocus;
 
-    auto bounds = getLocalBounds().reduced(12);
+    // More breathing room from the top/left/right edges than the bottom --
+    // matches the gap the reference mock left before the "Kind" label.
+    constexpr int kMarginSide = 28;
+    constexpr int kMarginTop = 28;
+    constexpr int kMarginBottom = 12;
+    auto bounds = getLocalBounds().withTrimmedLeft(kMarginSide).withTrimmedRight(kMarginSide)
+                                   .withTrimmedTop(kMarginTop).withTrimmedBottom(kMarginBottom);
 
     // Search-view layout (same geometry regardless of which view is active --
     // used both to place these components when visible and, offset above the
     // top edge, as where they animate to/from when hidden).
     auto area = bounds;
-    auto promptLabelBounds = area.removeFromTop(20);
+    auto promptLabelBounds = area.removeFromTop(26);
     area.removeFromTop(4);
-    auto promptEditorBounds = area.removeFromTop(30);
+    auto promptEditorBounds = area.removeFromTop(52);
     area.removeFromTop(12);
-    constexpr int buttonSize = 160;
+    constexpr int buttonSize = 200;
     auto captureButtonBounds = area.removeFromTop(buttonSize + 8).withSizeKeepingCentre(buttonSize, buttonSize);
     area.removeFromTop(4);
     auto statusLabelBounds = area.removeFromTop(20);
@@ -139,7 +149,7 @@ void ClauducerAudioProcessorEditor::onCaptureButtonClicked()
 void ClauducerAudioProcessorEditor::setStatus(const juce::String& text, bool isError)
 {
     statusLabel.setText(text, juce::dontSendNotification);
-    statusLabel.setColour(juce::Label::textColourId, isError ? juce::Colours::orangered : juce::Colours::lightgreen);
+    statusLabel.setColour(juce::Label::textColourId, isError ? juce::Colours::orangered : juce::Colour(0xff1f9d63));
 }
 
 void ClauducerAudioProcessorEditor::searchStarted()

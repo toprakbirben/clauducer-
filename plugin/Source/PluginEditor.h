@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include "ResultsListComponent.h"
 #include "CircularCaptureButton.h"
+#include "RoundedLookAndFeel.h"
 
 /** Top-level plugin UI. Two views animated between with juce::ComponentAnimator:
       - Search view: prompt field + big circular capture button.
@@ -47,6 +48,10 @@ private:
     bool focusedView = false;
 
     juce::Label promptLabel { {}, "What kind of sample do you want" };
+    // Declared before promptEditor so it outlives it (members are destroyed
+    // in reverse declaration order) -- the TextEditor keeps a raw pointer
+    // to it via setLookAndFeel().
+    RoundedTextEditorLookAndFeel promptEditorLookAndFeel;
     juce::TextEditor promptEditor;
     CircularCaptureButton captureButton;
     juce::Label statusLabel;

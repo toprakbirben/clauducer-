@@ -1,4 +1,5 @@
 #include "CircularCaptureButton.h"
+#include "BackgroundGradient.h"
 
 #define RIPPLESPHERE_GL_HEADER "RippleSphereGL.h"
 #include "RippleSphere.h"
@@ -27,11 +28,12 @@ namespace
     constexpr float kClickPulseAmplitude = 0.06f;
     constexpr float kClickPulseDecaySeconds = 0.35f;
 
-    // Must match PluginEditor's kBackground -- a GL surface composites as opaque
-    // against the host window (its alpha channel is ignored), so the square
-    // corners around the disc are masked out with an explicit fill in paint()
-    // rather than left transparent.
-    const juce::Colour kPanelBackground { 0xff0b0d14 };
+    // A GL surface composites as opaque against the host window (its alpha
+    // channel is ignored), so the square corners around the disc are masked
+    // out in paint() with the same gradient PluginEditor paints behind it
+    // (see BackgroundGradient.h), clipped to just that mask shape, rather
+    // than left transparent or filled with a flat colour that would seam
+    // against the gradient.
 
     void identity4(float* m)
     {
@@ -94,9 +96,9 @@ void CircularCaptureButton::newOpenGLContextCreated()
     sphere->params.lightDir[1] = -0.660f;
     sphere->params.lightDir[2] = -0.990f;
 
-    sphere->params.colorTrough[0] = 0.541f;  sphere->params.colorTrough[1] = 0.863f;  sphere->params.colorTrough[2] = 1.000f;
-    sphere->params.colorCrest[0]  = 1.000f;  sphere->params.colorCrest[1]  = 1.000f;  sphere->params.colorCrest[2]  = 1.000f;
-    sphere->params.rimColor[0]    = 0.459f;  sphere->params.rimColor[1]    = 0.600f;  sphere->params.rimColor[2]    = 0.663f;
+    sphere->params.colorTrough[0] = 0.750f;  sphere->params.colorTrough[1] = 0.870f;  sphere->params.colorTrough[2] = 0.960f;
+    sphere->params.colorCrest[0]  = 0.800f;  sphere->params.colorCrest[1]  = 0.740f;  sphere->params.colorCrest[2]  = 0.930f;
+    sphere->params.rimColor[0]    = 0.380f;  sphere->params.rimColor[1]    = 0.550f;  sphere->params.rimColor[2]    = 0.760f;
 
     sphere->params.ambient      = 0.210f;
     sphere->params.shininess    = 164.0f;
@@ -122,9 +124,9 @@ void CircularCaptureButton::renderOpenGL()
     const float dt = (float) juce::jlimit(0.0, 0.1, (now - lastRenderTimeMs) / 1000.0);
     lastRenderTimeMs = now;
 
-    sphere->params.rippleDir[0] = rippleX.load();
-    sphere->params.rippleDir[1] = rippleY.load();
-    sphere->params.rippleDir[2] = rippleZ.load();
+    sphere->params.rippleDir[0] = kRippleX;
+    sphere->params.rippleDir[1] = kRippleY;
+    sphere->params.rippleDir[2] = kRippleZ;
 
     const bool searching = animating.load();
     sphere->params.speed = searching ? kSearchSpeed : kIdleSpeed;
@@ -142,8 +144,14 @@ void CircularCaptureButton::renderOpenGL()
     const int w = juce::jmax(1, juce::roundToInt((float) bounds.getWidth() * scale));
     const int h = juce::jmax(1, juce::roundToInt((float) bounds.getHeight() * scale));
 
+    // Clearing to black would show through as a dark fringe where the GL
+    // surface's antialiased circular edge doesn't pixel-perfectly line up
+    // with the mask ellipse paint() draws around it (see paint()) -- clear
+    // to a light neutral matching the surrounding gradient's base tone
+    // instead, so that seam disappears into the backdrop rather than
+    // reading as a hard black ring.
     glViewport(0, 0, w, h);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearColor(0.965f, 0.955f, 0.975f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
@@ -177,8 +185,20 @@ void CircularCaptureButton::paint(juce::Graphics& g)
     // Crop the square GL viewport down to the disc the sphere actually
     // occupies (radius 1 world unit out of the kViewRadius half-frustum),
     // filling everything outside it so no black square shows through.
+    //
+    // The ripple displaces the mesh radially by up to ~kMaxInwardDisplacement
+    // world units (idle wobble plus a click's splash pulse, each further
+    // scaled by the shader's secondary-band term -- see waveHeight() in
+    // RippleSphere.cpp), so at trough phases the sphere's true silhouette
+    // pulls in from its radius-1 rest shape. Sizing the mask to the sphere's
+    // *rest* radius would then expose a sliver of raw GL clear colour at the
+    // rim on every trough; instead the mask is sized to the sphere's
+    // guaranteed-safe minimum radius, so it always sits at or inside the
+    // rendered silhouette (crests simply run a little past the mask, which
+    // just reads as part of the sphere rather than a gap).
+    constexpr float kMaxInwardDisplacement = (kIdleAmplitude + kClickPulseAmplitude) * 1.2f;
     const float minSide = juce::jmin(bounds.getWidth(), bounds.getHeight());
-    const float circleRadius = minSide * 0.5f / kViewRadius;
+    const float circleRadius = minSide * 0.5f / kViewRadius * (kSphereRadius - kMaxInwardDisplacement) / kSphereRadius;
     auto circleBounds = juce::Rectangle<float>(circleRadius * 2.0f, circleRadius * 2.0f)
                              .withCentre(bounds.getCentre());
 
@@ -186,45 +206,44 @@ void CircularCaptureButton::paint(juce::Graphics& g)
     mask.addRectangle(bounds);
     mask.addEllipse(circleBounds);
     mask.setUsingNonZeroWinding(false);
-    g.setColour(kPanelBackground);
-    g.fillPath(mask);
 
-    g.setColour(juce::Colours::white);
-    g.setFont(juce::Font(15.0f, juce::Font::bold));
-    g.drawFittedText(animating.load() ? "Searching..." : "Click to\nFind",
-                      getLocalBounds(), juce::Justification::centred, 2);
+    auto* editor = getParentComponent();
+    const auto editorBounds = editor != nullptr ? editor->getLocalBounds().toFloat() : bounds;
+    const auto originInEditor = getBounds().getTopLeft().toFloat();
+
+    g.saveState();
+    g.reduceClipRegion(mask);
+    paintAIGradientBackground(g, bounds, editorBounds, originInEditor);
+    g.restoreState();
+
+    // A soft, low-key white rim right at the disc's edge -- a gentle glow
+    // that eases the sphere into its surroundings rather than a hard cutout.
+    {
+        const juce::Colour rim = juce::Colours::white;
+        const float rimWidth = circleRadius * 0.10f;
+        const float rimStart = juce::jlimit(0.0f, 1.0f, 1.0f - rimWidth / circleRadius);
+
+        juce::ColourGradient rimGlow(rim.withAlpha(0.0f), bounds.getCentre(),
+                                      rim.withAlpha(0.22f), bounds.getCentre().translated(circleRadius, 0.0f),
+                                      true);
+        rimGlow.addColour((double) rimStart, rim.withAlpha(0.0f));
+        g.setGradientFill(rimGlow);
+        g.fillEllipse(circleBounds);
+    }
+
+    // No label drawn over the disc -- the status label below the button
+    // already carries state ("Analyzing and searching Splice...", error
+    // text, result count), so the sphere itself stays clean in every state.
 }
 
-void CircularCaptureButton::mouseDown(const juce::MouseEvent& e)
+void CircularCaptureButton::mouseDown(const juce::MouseEvent&)
 {
     if (locked.load())
         return;
 
-    // Map the click from screen space into the same front-on orthographic
-    // frame the sphere is rendered through (see renderOpenGL/paint), then
-    // reconstruct the point on the visible hemisphere directly beneath the
-    // cursor -- nz completes the unit direction, same as a standard
-    // normal-mapped disc.
-    const auto bounds = getLocalBounds().toFloat();
-    const float halfSidePx = juce::jmin(bounds.getWidth(), bounds.getHeight()) * 0.5f;
-    const auto centre = bounds.getCentre();
-
-    const float worldPerPixel = kViewRadius / halfSidePx;
-    float nx = (e.position.x - centre.x) * worldPerPixel / kSphereRadius;
-    float ny = -(e.position.y - centre.y) * worldPerPixel / kSphereRadius; // screen Y is flipped vs. world up
-
-    const float d2 = nx * nx + ny * ny;
-    if (d2 > 1.0f)
-    {
-        const float scale = 1.0f / std::sqrt(d2);
-        nx *= scale;
-        ny *= scale;
-    }
-    const float nz = std::sqrt(juce::jmax(0.0f, 1.0f - nx * nx - ny * ny));
-
-    rippleX = nx;
-    rippleY = ny;
-    rippleZ = nz;
+    // The ripple always originates from the fixed back-left/top point (see
+    // kRippleX/Y/Z) -- a click only adds a splash pulse, it doesn't move
+    // the origin.
     clickPulseStartMs = juce::Time::getMillisecondCounterHiRes();
 }
 

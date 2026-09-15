@@ -1,4 +1,5 @@
 #include "ResultsListComponent.h"
+#include "AppFont.h"
 
 // --- ResultRow -----------------------------------------------------------
 
@@ -27,8 +28,8 @@ public:
 
         auto area = getLocalBounds().reduced(8, 6);
 
-        g.setColour(juce::Colours::white);
-        g.setFont(juce::Font(14.0f, juce::Font::bold));
+        g.setColour(juce::Colour(0xff1c2030));
+        g.setFont(appFont(15.0f));
         g.drawFittedText(nameText, area.removeFromTop(area.getHeight() * 2 / 3),
                           juce::Justification::centredLeft, 1);
 
@@ -36,19 +37,19 @@ public:
         // meta text even on a narrow row.
         auto hintArea = area.removeFromRight(110);
 
-        g.setColour(juce::Colours::lightgrey);
+        g.setColour(juce::Colour(0xff5a6072));
         g.setFont(juce::Font(12.0f));
         g.drawFittedText(metaText, area, juce::Justification::centredLeft, 1);
 
         // Discoverability hint: dragging the row onto an Ableton track
         // downloads it (spending a Splice credit) -- not obvious just from
         // the cursor alone, so spell it out.
-        g.setColour(juce::Colours::grey);
+        g.setColour(juce::Colour(0xff8a90a0));
         g.setFont(juce::Font(11.0f, juce::Font::italic));
         g.drawFittedText(juce::CharPointer_UTF8("drag to add \xe2\x86\x92"), hintArea,
                           juce::Justification::centredRight, 1);
 
-        g.setColour(juce::Colour(0xff262b3d));
+        g.setColour(juce::Colour(0xffe2e5ec));
         g.drawLine(0.0f, static_cast<float>(getHeight() - 1), static_cast<float>(getWidth()), static_cast<float>(getHeight() - 1));
     }
 
@@ -93,7 +94,9 @@ ResultsListComponent::ResultsListComponent(ClauducerAudioProcessor& processorIn)
 {
     addAndMakeVisible(listBox);
     listBox.setRowHeight(48);
-    listBox.setColour(juce::ListBox::backgroundColourId, juce::Colour(0xff0b0d14));
+    // Transparent so the editor's own background shows through when there
+    // are no results yet, instead of a flat rectangle sitting over it.
+    listBox.setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
 }
 
 void ResultsListComponent::setResults(std::vector<BackendClient::SearchResult> newResults)
@@ -115,7 +118,7 @@ int ResultsListComponent::getNumRows()
 
 void ResultsListComponent::paintListBoxItem(int, juce::Graphics& g, int width, int height, bool rowIsSelected)
 {
-    g.fillAll(rowIsSelected ? juce::Colours::darkgrey : juce::Colours::black);
+    g.fillAll(rowIsSelected ? juce::Colour(0xffe6e9f0) : juce::Colour(0xfff6f7fb));
     juce::ignoreUnused(width, height);
 }
 

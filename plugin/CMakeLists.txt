@@ -17,7 +17,7 @@ juce_add_plugin(Clauducer
     COMPANY_NAME "Clauducer"
     PLUGIN_MANUFACTURER_CODE Clau
     PLUGIN_CODE Cldc
-    FORMATS VST3 AU
+    FORMATS VST3 AU Standalone
     PRODUCT_NAME "Clauducer"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -36,6 +36,8 @@ target_sources(Clauducer PRIVATE
     Source/RippleSphere.cpp
 )
 
+juce_add_binary_data(ClauducerFonts SOURCES Source/Fonts/UnicaOne-Regular.ttf)
+
 target_compile_definitions(Clauducer PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=1
@@ -46,6 +48,7 @@ target_link_libraries(Clauducer PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_opengl
+    ClauducerFonts
     PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
