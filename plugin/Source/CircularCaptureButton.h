@@ -43,10 +43,10 @@ private:
     std::atomic<bool> animating { false };
     double lastRenderTimeMs = 0.0;
 
-    // Where the ripple originates -- a point on the sphere's visible
-    // hemisphere, set from wherever the user last clicked (see mouseDown).
-    // Defaults to the tuned upper-left touch point until the first click.
-    std::atomic<float> rippleX { -0.706f }, rippleY { 0.709f }, rippleZ { 0.990f };
+    // Where the ripple originates -- a fixed point on the sphere's visible
+    // hemisphere, tuned to read as a back-left/top touch point. Clicking the
+    // button no longer moves this; it only triggers the splash pulse below.
+    static constexpr float kRippleX = -0.706f, kRippleY = 0.709f, kRippleZ = 0.990f;
 
     // A brief amplitude boost that decays after each click, so a new ripple
     // reads as a fresh splash rather than the pattern silently recentring.
