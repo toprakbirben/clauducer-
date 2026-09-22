@@ -36,7 +36,7 @@ target_sources(Clauducer PRIVATE
     Source/RippleSphere.cpp
     Source/LogPanel.cpp
     Source/LoginOverlay.cpp
-    Source/PreviewPanel.cpp
+    Source/PreviewPlayer.cpp
 )
 
 juce_add_binary_data(ClauducerFonts SOURCES Source/Fonts/UnicaOne-Regular.ttf)

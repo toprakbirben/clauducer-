@@ -56,12 +56,14 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     };
     addAndMakeVisible(resultsList);
 
-    resultsList.onPreviewRequested = [this](const BackendClient::SearchResult& result)
+    resultsList.onPreviewChanged = [this](const BackendClient::SearchResult* result)
     {
-        previewPanel.show(result.name, result.link);
+        if (result != nullptr)
+            previewPlayer.play(result->link);
+        else
+            previewPlayer.stop();
     };
-    previewPanel.onClose = [this] { previewPanel.setVisible(false); };
-    addChildComponent(previewPanel);
+    addChildComponent(previewPlayer);
 
     loginOverlay.onVisibilityChanged = [this](bool isShowing) { captureButton.setVisible(!isShowing); };
     addChildComponent(loginOverlay);
@@ -88,6 +90,7 @@ void ClauducerAudioProcessorEditor::paint(juce::Graphics& g)
 void ClauducerAudioProcessorEditor::resized()
 {
     setFocusedView(focusedView, false);
+    previewPlayer.setBounds(getLocalBounds()); // hidden, but the page needs a real layout size
     loginOverlay.setBounds(getLocalBounds());
 }
 
@@ -150,7 +153,6 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
         moveComponent(logPanel, offscreenAbove(logPanelBounds), 0.0f, animate);
         moveComponent(backButton, backButtonBounds, 1.0f, animate);
         moveComponent(resultsList, resultsFocusedBounds, 1.0f, animate);
-        previewPanel.setBounds(resultsFocusedBounds);
     }
     else
     {
@@ -161,7 +163,7 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
         moveComponent(logPanel, logPanelBounds, 1.0f, animate);
         moveComponent(backButton, offscreenAbove(backButtonBounds), 0.0f, animate);
         moveComponent(resultsList, resultsNormalBounds, 1.0f, animate);
-        previewPanel.setVisible(false);
+        resultsList.stopPreview();
     }
 
     // The faded-out view must not intercept clicks meant for the visible one.
@@ -247,7 +249,7 @@ void ClauducerAudioProcessorEditor::setStatus(const juce::String& text, bool isE
 void ClauducerAudioProcessorEditor::searchStarted()
 {
     captureButton.setAnimating(true);
-    previewPanel.setVisible(false);
+    resultsList.stopPreview();
     logPanel.clear();
     setStatus("Analyzing and searching Splice...", false);
 }

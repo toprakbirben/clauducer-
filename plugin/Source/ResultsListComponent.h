@@ -6,9 +6,9 @@
 
 /** One row per Splice search result: name/metadata, and the row itself is
     the drag source for dragging the sound out to an Ableton track. A plain
-    click (not a drag) fires onPreviewRequested, which the editor uses to
-    show the sound's Splice webpage in an embedded PreviewPanel (falls back
-    to the default browser if unset).
+    click (not a drag) toggles that sound's preview: onPreviewChanged fires
+    with the result to play (the editor plays it via PreviewPlayer), or with
+    nullptr to stop. The playing row is marked with a play symbol.
 
     No direct audio preview: Splice's MCP tools don't return a preview-audio
     URL, the page's preview audio is scrambled, and scraping it was rejected
@@ -40,8 +40,12 @@ public:
     */
     std::function<void(const juce::String& errorMessage)> onDragError;
 
-    /** Fired on a plain click (not a drag) on a result row. */
-    std::function<void(const BackendClient::SearchResult&)> onPreviewRequested;
+    /** Fired when the previewed result changes: the result to play, or
+        nullptr to stop. */
+    std::function<void(const BackendClient::SearchResult*)> onPreviewChanged;
+
+    /** Stops any playing preview and clears its marker. */
+    void stopPreview();
 
 private:
     class ResultRow;
@@ -58,12 +62,15 @@ private:
     // hover or on preview).
     void startDragForRow(int row, juce::Component* dragSourceComponent);
 
-    // A plain click (no drag) on row -- previews its Splice webpage.
-    void openWebpageForRow(int row);
+    // A plain click (no drag) on row -- plays its preview, or stops it if
+    // it's the one already playing.
+    void togglePreviewForRow(int row);
+    void setPlayingRow(int row);
 
     ClauducerAudioProcessor& processor;
     juce::ListBox listBox { "results", this };
     std::vector<BackendClient::SearchResult> results;
+    int playingRow = -1;
 
     // Local cache of already-downloaded files this session, keyed by
     // asset_uuid, so dragging the same result twice in one session doesn't

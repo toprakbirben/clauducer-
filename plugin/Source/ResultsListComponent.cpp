@@ -30,7 +30,8 @@ public:
 
         g.setColour(juce::Colour(0xff1c2030));
         g.setFont(appFont(15.0f));
-        g.drawFittedText(nameText, area.removeFromTop(area.getHeight() * 2 / 3),
+        const bool isPlaying = rowIndex >= 0 && rowIndex == owner.playingRow;
+        g.drawFittedText(isPlaying ? juce::String(juce::CharPointer_UTF8("\xe2\x96\xb6 ")) + nameText : nameText, area.removeFromTop(area.getHeight() * 2 / 3),
                           juce::Justification::centredLeft, 1);
 
         // Split before drawing either, so the hint can never overlap the
@@ -75,9 +76,9 @@ public:
     void mouseUp(const juce::MouseEvent&) override
     {
         // A plain click (mouse went up without ever crossing the drag
-        // threshold above) previews the sound's Splice webpage instead.
+        // threshold above) plays/stops the sound's preview instead.
         if (!dragStarted)
-            owner.openWebpageForRow(rowIndex);
+            owner.togglePreviewForRow(rowIndex);
     }
 
 private:
@@ -101,6 +102,7 @@ ResultsListComponent::ResultsListComponent(ClauducerAudioProcessor& processorIn)
 
 void ResultsListComponent::setResults(std::vector<BackendClient::SearchResult> newResults)
 {
+    stopPreview();
     results = std::move(newResults);
     listBox.updateContent();
     listBox.repaint();
@@ -173,17 +175,36 @@ void ResultsListComponent::startDragForRow(int row, juce::Component* dragSourceC
     container->performExternalDragDropOfFiles({ localPath }, false, dragSourceComponent);
 }
 
-void ResultsListComponent::openWebpageForRow(int row)
+void ResultsListComponent::togglePreviewForRow(int row)
 {
     if (row < 0 || row >= static_cast<int>(results.size()))
         return;
 
     const auto& result = results[static_cast<size_t>(row)];
-    if (result.link.isEmpty())
+    if (row == playingRow || result.link.isEmpty())
+    {
+        stopPreview();
+        return;
+    }
+
+    setPlayingRow(row);
+    if (onPreviewChanged)
+        onPreviewChanged(&result);
+}
+
+void ResultsListComponent::stopPreview()
+{
+    if (playingRow < 0)
         return;
 
-    if (onPreviewRequested)
-        onPreviewRequested(result);
-    else
-        juce::URL(result.link).launchInDefaultBrowser();
+    setPlayingRow(-1);
+    if (onPreviewChanged)
+        onPreviewChanged(nullptr);
+}
+
+void ResultsListComponent::setPlayingRow(int row)
+{
+    playingRow = row;
+    listBox.updateContent();
+    listBox.repaint();
 }
