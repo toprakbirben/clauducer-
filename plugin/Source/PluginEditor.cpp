@@ -44,13 +44,15 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     statusLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(statusLabel);
 
+    addAndMakeVisible(logPanel);
+
     backButton.onClick = [this] { setFocusedView(false, true); };
     addAndMakeVisible(backButton);
 
     resultsList.onDragError = [this](const juce::String& message) { setStatus(message, true); };
     addAndMakeVisible(resultsList);
 
-    setSize(520, 560);
+    setSize(520, 680);
     setFocusedView(false, false);
 
     if (isStandalone)
@@ -109,7 +111,9 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
     auto captureButtonBounds = area.removeFromTop(buttonSize + 8).withSizeKeepingCentre(buttonSize, buttonSize);
     area.removeFromTop(4);
     auto statusLabelBounds = area.removeFromTop(20);
-    area.removeFromTop(4);
+    area.removeFromTop(6);
+    auto logPanelBounds = area.removeFromTop(120);
+    area.removeFromTop(6);
     auto resultsNormalBounds = area;
 
     // Focus-view layout: back button top-left, results fill nearly everything.
@@ -126,6 +130,7 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
         moveComponent(promptEditor, offscreenAbove(promptEditorBounds), 0.0f, animate);
         moveComponent(captureButton, offscreenAbove(captureButtonBounds), 0.0f, animate);
         moveComponent(statusLabel, offscreenAbove(statusLabelBounds), 0.0f, animate);
+        moveComponent(logPanel, offscreenAbove(logPanelBounds), 0.0f, animate);
         moveComponent(backButton, backButtonBounds, 1.0f, animate);
         moveComponent(resultsList, resultsFocusedBounds, 1.0f, animate);
     }
@@ -135,6 +140,7 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
         moveComponent(promptEditor, promptEditorBounds, 1.0f, animate);
         moveComponent(captureButton, captureButtonBounds, 1.0f, animate);
         moveComponent(statusLabel, statusLabelBounds, 1.0f, animate);
+        moveComponent(logPanel, logPanelBounds, 1.0f, animate);
         moveComponent(backButton, offscreenAbove(backButtonBounds), 0.0f, animate);
         moveComponent(resultsList, resultsNormalBounds, 1.0f, animate);
     }
@@ -142,6 +148,7 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
     // The faded-out view must not intercept clicks meant for the visible one.
     promptEditor.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
     captureButton.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
+    logPanel.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
     backButton.setInterceptsMouseClicks(shouldFocus, shouldFocus);
 }
 
@@ -221,7 +228,13 @@ void ClauducerAudioProcessorEditor::setStatus(const juce::String& text, bool isE
 void ClauducerAudioProcessorEditor::searchStarted()
 {
     captureButton.setAnimating(true);
+    logPanel.clear();
     setStatus("Analyzing and searching Splice...", false);
+}
+
+void ClauducerAudioProcessorEditor::searchLog(const juce::String& line)
+{
+    logPanel.addLine(line);
 }
 
 void ClauducerAudioProcessorEditor::searchCompleted(const BackendClient::SearchResponse& response)

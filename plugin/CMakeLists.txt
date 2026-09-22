@@ -34,6 +34,7 @@ target_sources(Clauducer PRIVATE
     Source/BackendClient.cpp
     Source/CircularCaptureButton.cpp
     Source/RippleSphere.cpp
+    Source/LogPanel.cpp
 )
 
 juce_add_binary_data(ClauducerFonts SOURCES Source/Fonts/UnicaOne-Regular.ttf)

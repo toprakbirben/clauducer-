@@ -15,27 +15,75 @@ public:
 
     void run() override
     {
+        log("Loaded " + juce::File(audioPath).getFileName());
+
+        BackendClient::AnalyzeResponse analysis;
+        auto result = backend.analyze(audioPath, analysis);
+        if (result.failed())
+        {
+            fail(result.getErrorMessage());
+            return;
+        }
+        log(describeFeatures(analysis.features));
+        if (analysis.feeling.isNotEmpty())
+            log("Feeling: " + analysis.feeling);
+
+        if (threadShouldExit())
+            return;
+
+        log("Searching Splice...");
         BackendClient::SearchResponse response;
-        auto result = backend.search(audioPath, prompt, response);
+        result = backend.search(audioPath, prompt, response, analysis.features);
 
         if (result.failed())
         {
-            auto message = result.getErrorMessage();
-            juce::MessageManager::callAsync([&ownerRef = owner, message]
-            {
-                ownerRef.listeners.call([&](ClauducerAudioProcessor::SearchListener& l) { l.searchFailed(message); });
-            });
+            fail(result.getErrorMessage());
+            return;
         }
-        else
+
+        log("Query: \"" + response.query + "\"");
+        log(juce::String(response.results.size()) + " results");
+        juce::MessageManager::callAsync([&ownerRef = owner, response]
         {
-            juce::MessageManager::callAsync([&ownerRef = owner, response]
-            {
-                ownerRef.listeners.call([&](ClauducerAudioProcessor::SearchListener& l) { l.searchCompleted(response); });
-            });
-        }
+            ownerRef.listeners.call([&](ClauducerAudioProcessor::SearchListener& l) { l.searchCompleted(response); });
+        });
     }
 
 private:
+    // e.g. "12.3s · Tempo 86 BPM · C# minor · dark, punchy, thin"
+    static juce::String describeFeatures(const juce::var& f)
+    {
+        juce::StringArray parts;
+        parts.add(juce::String(static_cast<double>(f.getProperty("duration_sec", 0.0)), 1) + "s");
+        const auto bpm = static_cast<double>(f.getProperty("tempo_bpm", 0.0));
+        parts.add(bpm >= 20.0 ? "Tempo " + juce::String(juce::roundToInt(bpm)) + " BPM" : juce::String("No steady tempo"));
+        parts.add(f.getProperty("key", "").toString() + " " + f.getProperty("mode", "").toString());
+        juce::StringArray timbre;
+        if (auto* descriptors = f.getProperty("timbre_descriptors", juce::var()).getArray())
+            for (auto& d : *descriptors)
+                timbre.add(d.toString());
+        if (!timbre.isEmpty())
+            parts.add(timbre.joinIntoString(", "));
+        return parts.joinIntoString(juce::CharPointer_UTF8(" \xc2\xb7 "));
+    }
+
+    void log(const juce::String& line)
+    {
+        juce::MessageManager::callAsync([&ownerRef = owner, line]
+        {
+            ownerRef.listeners.call([&](ClauducerAudioProcessor::SearchListener& l) { l.searchLog(line); });
+        });
+    }
+
+    void fail(const juce::String& message)
+    {
+        log("Error: " + message);
+        juce::MessageManager::callAsync([&ownerRef = owner, message]
+        {
+            ownerRef.listeners.call([&](ClauducerAudioProcessor::SearchListener& l) { l.searchFailed(message); });
+        });
+    }
+
     ClauducerAudioProcessor& owner;
     BackendClient& backend;
     juce::String audioPath;

@@ -5,6 +5,7 @@
 #include "ResultsListComponent.h"
 #include "CircularCaptureButton.h"
 #include "RoundedLookAndFeel.h"
+#include "LogPanel.h"
 
 /** Top-level plugin UI. Two views animated between with juce::ComponentAnimator:
       - Search view: prompt field + big circular capture button.
@@ -40,6 +41,7 @@ private:
     void searchStarted() override;
     void searchCompleted(const BackendClient::SearchResponse&) override;
     void searchFailed(const juce::String& errorMessage) override;
+    void searchLog(const juce::String& line) override;
 
     void onCaptureButtonClicked();
     void chooseReferenceFile();
@@ -71,6 +73,7 @@ private:
     juce::TextEditor promptEditor;
     CircularCaptureButton captureButton;
     juce::Label statusLabel;
+    LogPanel logPanel;
     juce::TextButton backButton { juce::CharPointer_UTF8("\xe2\x86\x90 Back") }; // "← Back"
     ResultsListComponent resultsList;
 

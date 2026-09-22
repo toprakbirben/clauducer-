@@ -29,14 +29,26 @@ public:
     struct SearchResponse
     {
         std::vector<SearchResult> results;
+        juce::String query; // the natural-language query sent to Splice
+    };
+
+    struct AnalyzeResponse
+    {
+        juce::var features; // passed back to search() to skip re-analysis
+        juce::String feeling;
     };
 
     explicit BackendClient(juce::String baseUrl = "http://127.0.0.1:8787");
 
+    /** POST /analyze: audio features plus a short "feeling" description. */
+    juce::Result analyze(const juce::String& audioPath, AnalyzeResponse& out);
+
     /** POST /search. On failure, returns a failed juce::Result with a message
         suitable for direct display in the UI (connection error, backend error, etc).
+        Pass the features from a prior analyze() to skip re-analyzing the audio.
     */
-    juce::Result search(const juce::String& audioPath, const juce::String& prompt, SearchResponse& out);
+    juce::Result search(const juce::String& audioPath, const juce::String& prompt, SearchResponse& out,
+                        const juce::var& features = {});
 
     /** POST /download. Spends a Splice credit as a side effect of this call
         succeeding -- callers must only invoke this once a real drag has

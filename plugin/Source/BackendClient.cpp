@@ -9,11 +9,10 @@ juce::Result BackendClient::postJson(const juce::String& path, const juce::var& 
 
     // On macOS this backs NSMutableURLRequest.timeoutInterval, which is the
     // total request timeout, not just the TCP handshake -- confirmed live
-    // that a 15s value here was aborting /search before the backend's own
-    // claude-CLI-backed search (which can legitimately take up to 90s, see
-    // backend/service.py) finished, surfacing as a false "backend
-    // unreachable" error even though the backend was running the whole
-    // time. 100s gives margin over that 90s ceiling.
+    // that a 15s value here was aborting /search (then backed by the claude
+    // CLI, up to 90s) and surfacing as a false "backend unreachable" error.
+    // /search and /analyze can still make Claude API calls, so keep the
+    // generous margin.
     static constexpr int kTimeoutMs = 100000;
 
     int statusCode = 0;
@@ -45,11 +44,29 @@ juce::Result BackendClient::postJson(const juce::String& path, const juce::var& 
     return juce::Result::ok();
 }
 
-juce::Result BackendClient::search(const juce::String& audioPath, const juce::String& prompt, SearchResponse& out)
+juce::Result BackendClient::analyze(const juce::String& audioPath, AnalyzeResponse& out)
+{
+    auto* body = new juce::DynamicObject();
+    body->setProperty("audio_path", audioPath);
+
+    juce::var response;
+    auto result = postJson("/analyze", juce::var(body), response);
+    if (result.failed())
+        return result;
+
+    out.features = response.getProperty("features", juce::var());
+    out.feeling = response.getProperty("feeling", "").toString();
+    return juce::Result::ok();
+}
+
+juce::Result BackendClient::search(const juce::String& audioPath, const juce::String& prompt, SearchResponse& out,
+                                   const juce::var& features)
 {
     auto* body = new juce::DynamicObject();
     body->setProperty("audio_path", audioPath);
     body->setProperty("prompt", prompt);
+    if (features.isObject())
+        body->setProperty("features", features);
 
     juce::var response;
     auto result = postJson("/search", juce::var(body), response);
@@ -57,6 +74,7 @@ juce::Result BackendClient::search(const juce::String& audioPath, const juce::St
         return result;
 
     out.results.clear();
+    out.query = response.getProperty("query", juce::var()).getProperty("query", "").toString();
     if (auto* resultsArray = response.getProperty("results", juce::var()).getArray())
     {
         for (auto& item : *resultsArray)

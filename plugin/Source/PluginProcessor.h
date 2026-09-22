@@ -58,10 +58,12 @@ public:
         virtual void searchStarted() {}
         virtual void searchCompleted(const BackendClient::SearchResponse&) {}
         virtual void searchFailed(const juce::String&) {}
+        // One human-readable progress line per step (analysis, feeling, query, results).
+        virtual void searchLog(const juce::String&) {}
     };
     void addSearchListener(SearchListener* l) { listeners.add(l); }
     void removeSearchListener(SearchListener* l) { listeners.remove(l); }
-    /** Kicks off POST /search on a background thread; results (or failure)
+    /** Kicks off POST /analyze then POST /search on a background thread; results (or failure)
         arrive later via Listener callbacks on the message thread.
     */
     void runSearch(const juce::String& capturedAudioPath, const juce::String& prompt);
