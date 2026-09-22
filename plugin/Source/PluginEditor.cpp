@@ -56,6 +56,13 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     };
     addAndMakeVisible(resultsList);
 
+    resultsList.onPreviewRequested = [this](const BackendClient::SearchResult& result)
+    {
+        previewPanel.show(result.name, result.link);
+    };
+    previewPanel.onClose = [this] { previewPanel.setVisible(false); };
+    addChildComponent(previewPanel);
+
     loginOverlay.onVisibilityChanged = [this](bool isShowing) { captureButton.setVisible(!isShowing); };
     addChildComponent(loginOverlay);
 
@@ -143,6 +150,7 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
         moveComponent(logPanel, offscreenAbove(logPanelBounds), 0.0f, animate);
         moveComponent(backButton, backButtonBounds, 1.0f, animate);
         moveComponent(resultsList, resultsFocusedBounds, 1.0f, animate);
+        previewPanel.setBounds(resultsFocusedBounds);
     }
     else
     {
@@ -153,6 +161,7 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
         moveComponent(logPanel, logPanelBounds, 1.0f, animate);
         moveComponent(backButton, offscreenAbove(backButtonBounds), 0.0f, animate);
         moveComponent(resultsList, resultsNormalBounds, 1.0f, animate);
+        previewPanel.setVisible(false);
     }
 
     // The faded-out view must not intercept clicks meant for the visible one.
@@ -238,6 +247,7 @@ void ClauducerAudioProcessorEditor::setStatus(const juce::String& text, bool isE
 void ClauducerAudioProcessorEditor::searchStarted()
 {
     captureButton.setAnimating(true);
+    previewPanel.setVisible(false);
     logPanel.clear();
     setStatus("Analyzing and searching Splice...", false);
 }

@@ -75,7 +75,7 @@ public:
     void mouseUp(const juce::MouseEvent&) override
     {
         // A plain click (mouse went up without ever crossing the drag
-        // threshold above) opens the sound's Splice webpage instead.
+        // threshold above) previews the sound's Splice webpage instead.
         if (!dragStarted)
             owner.openWebpageForRow(rowIndex);
     }
@@ -178,7 +178,12 @@ void ResultsListComponent::openWebpageForRow(int row)
     if (row < 0 || row >= static_cast<int>(results.size()))
         return;
 
-    const auto& link = results[static_cast<size_t>(row)].link;
-    if (link.isNotEmpty())
-        juce::URL(link).launchInDefaultBrowser();
+    const auto& result = results[static_cast<size_t>(row)];
+    if (result.link.isEmpty())
+        return;
+
+    if (onPreviewRequested)
+        onPreviewRequested(result);
+    else
+        juce::URL(result.link).launchInDefaultBrowser();
 }

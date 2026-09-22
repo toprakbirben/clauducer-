@@ -7,6 +7,7 @@
 #include "RoundedLookAndFeel.h"
 #include "LogPanel.h"
 #include "LoginOverlay.h"
+#include "PreviewPanel.h"
 
 /** Top-level plugin UI. Two views animated between with juce::ComponentAnimator:
       - Search view: prompt field + big circular capture button.
@@ -79,6 +80,7 @@ private:
     LogPanel logPanel;
     juce::TextButton backButton { juce::CharPointer_UTF8("\xe2\x86\x90 Back") }; // "← Back"
     ResultsListComponent resultsList;
+    PreviewPanel previewPanel; // over the results list in the focus view
     LoginOverlay loginOverlay; // last, so it sits above everything else
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ClauducerAudioProcessorEditor)

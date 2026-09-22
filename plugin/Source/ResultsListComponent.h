@@ -6,15 +6,14 @@
 
 /** One row per Splice search result: name/metadata, and the row itself is
     the drag source for dragging the sound out to an Ableton track. A plain
-    click (not a drag) opens the sound's Splice webpage in the default
-    browser so the user can preview it there.
+    click (not a drag) fires onPreviewRequested, which the editor uses to
+    show the sound's Splice webpage in an embedded PreviewPanel (falls back
+    to the default browser if unset).
 
-    No in-plugin audio preview: confirmed live that Splice's MCP tools don't
-    return a preview-audio URL, only a link to the sound's webpage. Scraping
-    that webpage for a real preview URL was considered and rejected --
-    Splice's Terms of Use (splice.com/terms, Section II(8)(j)) explicitly
-    prohibits automated scraping/data extraction from their web pages, with
-    no applicable exception here.
+    No direct audio preview: Splice's MCP tools don't return a preview-audio
+    URL, the page's preview audio is scrambled, and scraping it was rejected
+    -- Splice's Terms of Use (splice.com/terms, Section II(8)(j)) prohibit
+    automated scraping/data extraction from their web pages.
 
     JUCE's ListBoxModel::getDragSourceDescription is for internal (JUCE
     component to JUCE component) drags, not OS-level external drag-out, so
@@ -41,6 +40,9 @@ public:
     */
     std::function<void(const juce::String& errorMessage)> onDragError;
 
+    /** Fired on a plain click (not a drag) on a result row. */
+    std::function<void(const BackendClient::SearchResult&)> onPreviewRequested;
+
 private:
     class ResultRow;
     friend class ResultRow;
@@ -56,7 +58,7 @@ private:
     // hover or on preview).
     void startDragForRow(int row, juce::Component* dragSourceComponent);
 
-    // A plain click (no drag) on row -- opens its Splice webpage.
+    // A plain click (no drag) on row -- previews its Splice webpage.
     void openWebpageForRow(int row);
 
     ClauducerAudioProcessor& processor;
