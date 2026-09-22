@@ -50,7 +50,16 @@ private:
 
     // A brief amplitude boost that decays after each click, so a new ripple
     // reads as a fresh splash rather than the pattern silently recentring.
+    // Its strength and decay are set on release from how long the press was
+    // held (see chargeAt()); while held, the surface swells.
     std::atomic<double> clickPulseStartMs { -1.0e15 };
+    std::atomic<double> pressStartMs { 0.0 };
+    std::atomic<bool> holding { false };
+    std::atomic<float> pulseAmplitude { 0.0f };
+    std::atomic<float> pulseDecaySeconds { 0.35f };
+
+    // 0..1: how far the current press is towards a full-strength splash.
+    float chargeAt(double nowMs) const;
 
     // See setLocked().
     std::atomic<bool> locked { false };
