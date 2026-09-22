@@ -53,14 +53,41 @@ class CheckedQueryTests(unittest.TestCase):
 
 
 class CheckedFeelingTests(unittest.TestCase):
-    def test_short_feeling_passes(self):
-        self.assertEqual(match._checked_feeling("Brooding and restless."), "Brooding and restless.")
+    # The plugin logs this as "Feeling: <words>" -- a handful of mood tags,
+    # not a paragraph.
+    def test_mood_words_pass_and_are_normalised(self):
+        self.assertEqual(match._checked_feeling("Brooding, restless, laid-back"), "brooding, restless, laid-back")
 
-    def test_rambling_feeling_rejected(self):
+    def test_sentence_rejected(self):
         with self.assertRaises(ValueError):
-            match._checked_feeling("Sure! " + "very moody " * 40)
+            match._checked_feeling("This dark arp feels brooding, restless, and tense.")
+
+    def test_too_few_or_too_many_words_rejected(self):
         with self.assertRaises(ValueError):
-            match._checked_feeling("Line one.\nLine two.\nLine three.")
+            match._checked_feeling("moody, dark")
+        with self.assertRaises(ValueError):
+            match._checked_feeling("moody, dark, tense, restless, cold, heavy")
+
+    def test_template_feeling_is_valid_words(self):
+        for tempo in (0.0, 80.0, 128.0, 170.0):
+            feeling = match._template_feeling(_features(tempo))
+            self.assertEqual(match._checked_feeling(feeling), feeling)
+
+
+class ConcreteQueryTests(unittest.TestCase):
+    # describe_a_sound only receives the text; "the reference" means nothing
+    # to it and just adds noise to the search.
+    def test_query_mentioning_reference_rejected(self):
+        with self.assertRaises(ValueError):
+            match._checked_query(
+                {"query": "bass that matches the reference track's energy", "type": "loop"}, _features(92.0)
+            )
+
+    def test_template_query_never_mentions_reference(self):
+        for tempo in (0.0, 92.0):
+            query = match._template_query(_features(tempo), "gritty bass")["query"]
+            self.assertNotIn("reference", query.lower())
+            self.assertIn("A minor", query)
 
 
 class FallbackTests(unittest.TestCase):
