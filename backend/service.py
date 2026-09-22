@@ -89,12 +89,13 @@ def _run_login() -> None:
 _RESULT_BLOCK_RE = re.compile(r"^### \d+\. (.+)$", re.MULTILINE)
 _BPM_RE = re.compile(r"BPM: (\d+(?:\.\d+)?)")
 _KEY_RE = re.compile(r"Key: ([^|\n]+)")
+_DURATION_RE = re.compile(r"Duration: (\d+(?:\.\d+)?)s")
 _LINK_RE = re.compile(r"\*\*Link:\*\* (\S+)")
 _UUID_RE = re.compile(r"\*\*Asset UUID:\*\* (\S+)")
 
 
 def _parse_search_results(text: str) -> list[dict]:
-    """Parse describe_a_sound's markdown reply into {name, bpm?, key?, link, asset_uuid}.
+    """Parse describe_a_sound's markdown reply into {name, bpm?, key?, duration_sec?, link, asset_uuid}.
 
     The tool has no output schema; each hit is a `### N. <file name>` block
     with `BPM: .. | Key: ..` (both absent for one-shots), `**Link:**` and
@@ -112,6 +113,8 @@ def _parse_search_results(text: str) -> list[dict]:
             item["bpm"] = float(bpm.group(1))
         if key := _KEY_RE.search(block):
             item["key"] = key.group(1).strip()
+        if duration := _DURATION_RE.search(block):
+            item["duration_sec"] = float(duration.group(1))
         results.append(item)
     return results
 

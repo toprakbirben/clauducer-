@@ -51,11 +51,14 @@ class ParseSearchResultsTests(unittest.TestCase):
         self.assertEqual(results[1]["name"], "PL_VEN_88_Piano_Loop_Distance_A#m.wav")
         self.assertEqual(results[0]["bpm"], 90.0)
         self.assertEqual(results[0]["key"], "e minor")
+        # shown on each plugin row so the user knows how long a preview runs
+        self.assertEqual(results[0]["duration_sec"], 10.7)
 
     def test_oneshot_has_no_bpm_or_key_rather_than_a_wrong_one(self):
         (result,) = _parse_search_results(ONESHOT_TEXT)
         self.assertNotIn("bpm", result)
         self.assertNotIn("key", result)
+        self.assertEqual(result["duration_sec"], 0.6)
         self.assertEqual(result["asset_uuid"], "461d86f4-2ef4-4a76-be15-e452e5d4bd3a")
 
     def test_block_without_uuid_is_skipped(self):
