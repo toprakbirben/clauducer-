@@ -14,9 +14,14 @@
     Derives from juce::DragAndDropContainer so ResultsListComponent's rows
     have somewhere to originate their external (OS-level) drag from -- this
     is the standard JUCE pattern for a plugin editor that needs drag-out.
+
+    In the Standalone build there is no track audio to capture, so the
+    capture button instead picks an audio file (or one is dropped onto the
+    window) and searches with that.
 */
 class ClauducerAudioProcessorEditor : public juce::AudioProcessorEditor,
                                        public juce::DragAndDropContainer,
+                                       public juce::FileDragAndDropTarget,
                                        private ClauducerAudioProcessor::SearchListener
 {
 public:
@@ -26,6 +31,10 @@ public:
     void paint(juce::Graphics&) override;
     void resized() override;
 
+    // juce::FileDragAndDropTarget (only accepts drops in the Standalone build)
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
+
 private:
     // ClauducerAudioProcessor::SearchListener
     void searchStarted() override;
@@ -33,6 +42,8 @@ private:
     void searchFailed(const juce::String& errorMessage) override;
 
     void onCaptureButtonClicked();
+    void chooseReferenceFile();
+    void setReferenceFile(const juce::File& file);
     void setStatus(const juce::String& text, bool isError);
 
     // Lays out (or animates towards, if animate is true) either the search
@@ -46,6 +57,11 @@ private:
     // same-named field here would shadow it.
     ClauducerAudioProcessor& audioProcessor;
     bool focusedView = false;
+
+    // Standalone-only: the user-picked reference file replaces live capture.
+    const bool isStandalone;
+    juce::File referenceFile;
+    std::unique_ptr<juce::FileChooser> fileChooser;
 
     juce::Label promptLabel { {}, "What kind of sample do you want" };
     // Declared before promptEditor so it outlives it (members are destroyed

@@ -8,10 +8,18 @@ namespace
     const juce::Colour kFieldBorder { 0xffd7dbe8 };
     const juce::Colour kTextPrimary { 0xff1c2030 };
     constexpr int kAnimationMs = 320;
+    const juce::String kAudioFilePatterns = "*.wav;*.aif;*.aiff;*.mp3;*.flac";
+
+    bool isSupportedAudioFile(const juce::File& f)
+    {
+        return f.existsAsFile() && f.hasFileExtension("wav;aif;aiff;mp3;flac");
+    }
 }
 
 ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProcessor& p)
-    : AudioProcessorEditor(&p), audioProcessor(p), resultsList(p)
+    : AudioProcessorEditor(&p), audioProcessor(p),
+      isStandalone(p.wrapperType == juce::AudioProcessor::wrapperType_Standalone),
+      resultsList(p)
 {
     audioProcessor.addSearchListener(this);
 
@@ -44,6 +52,9 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
 
     setSize(520, 560);
     setFocusedView(false, false);
+
+    if (isStandalone)
+        setStatus("Drop an audio file here, or click the button to choose one.", false);
 }
 
 ClauducerAudioProcessorEditor::~ClauducerAudioProcessorEditor()
@@ -136,6 +147,22 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
 
 void ClauducerAudioProcessorEditor::onCaptureButtonClicked()
 {
+    if (isStandalone)
+    {
+        if (!referenceFile.existsAsFile())
+        {
+            chooseReferenceFile();
+            return;
+        }
+        if (promptEditor.getText().trim().isEmpty())
+        {
+            setStatus("Enter a prompt, then click again to search.", true);
+            return;
+        }
+        audioProcessor.runSearch(referenceFile.getFullPathName(), promptEditor.getText());
+        return;
+    }
+
     auto capturedPath = audioProcessor.captureReferenceToTempFile(4.0);
     if (capturedPath.isEmpty())
     {
@@ -144,6 +171,45 @@ void ClauducerAudioProcessorEditor::onCaptureButtonClicked()
     }
 
     audioProcessor.runSearch(capturedPath, promptEditor.getText());
+}
+
+void ClauducerAudioProcessorEditor::chooseReferenceFile()
+{
+    fileChooser = std::make_unique<juce::FileChooser>("Choose a reference audio file", juce::File(), kAudioFilePatterns);
+    fileChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                             [this](const juce::FileChooser& chooser)
+                             {
+                                 auto file = chooser.getResult();
+                                 if (file == juce::File())
+                                     return; // cancelled
+                                 setReferenceFile(file);
+                                 if (referenceFile.existsAsFile() && promptEditor.getText().trim().isNotEmpty())
+                                     audioProcessor.runSearch(referenceFile.getFullPathName(), promptEditor.getText());
+                             });
+}
+
+void ClauducerAudioProcessorEditor::setReferenceFile(const juce::File& file)
+{
+    if (!isSupportedAudioFile(file))
+    {
+        setStatus("Unsupported file: " + file.getFileName() + " (use wav, aif, mp3 or flac)", true);
+        return;
+    }
+    referenceFile = file;
+    captureButton.setLocked(false);
+    setStatus(file.getFileName() + (promptEditor.getText().trim().isEmpty() ? " -- now enter a prompt" : " -- click to search"), false);
+}
+
+bool ClauducerAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    return isStandalone && files.size() == 1 && isSupportedAudioFile(juce::File(files[0]));
+}
+
+void ClauducerAudioProcessorEditor::filesDropped(const juce::StringArray& files, int, int)
+{
+    if (focusedView)
+        setFocusedView(false, true);
+    setReferenceFile(juce::File(files[0]));
 }
 
 void ClauducerAudioProcessorEditor::setStatus(const juce::String& text, bool isError)
