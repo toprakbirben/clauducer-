@@ -63,6 +63,11 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
         else
             previewPlayer.stop();
     };
+    resultsList.onRowHovered = [this](const BackendClient::SearchResult& result)
+    {
+        previewPlayer.prepare(result.link);
+    };
+    previewPlayer.onFinished = [this] { resultsList.stopPreview(); };
     addChildComponent(previewPlayer);
 
     loginOverlay.onVisibilityChanged = [this](bool isShowing) { captureButton.setVisible(!isShowing); };
@@ -264,6 +269,10 @@ void ClauducerAudioProcessorEditor::searchCompleted(const BackendClient::SearchR
     captureButton.setAnimating(false);
     setStatus(juce::String(response.results.size()) + " results", false);
     resultsList.setResults(response.results);
+    // Warm the preview page with the top result, so the first click only
+    // has to press play.
+    if (!response.results.empty())
+        previewPlayer.prepare(response.results.front().link);
     setFocusedView(true, true);
 }
 

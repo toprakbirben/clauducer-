@@ -44,6 +44,10 @@ public:
         nullptr to stop. */
     std::function<void(const BackendClient::SearchResult*)> onPreviewChanged;
 
+    /** Fired when the pointer enters a result row, so its preview can be
+        loaded ahead of a click. */
+    std::function<void(const BackendClient::SearchResult&)> onRowHovered;
+
     /** Stops any playing preview and clears its marker. */
     void stopPreview();
 
@@ -66,6 +70,7 @@ private:
     // it's the one already playing.
     void togglePreviewForRow(int row);
     void setPlayingRow(int row);
+    void rowHovered(int row);
 
     ClauducerAudioProcessor& processor;
     juce::ListBox listBox { "results", this };

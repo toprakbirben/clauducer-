@@ -96,6 +96,7 @@ juce::Result BackendClient::search(const juce::String& audioPath, const juce::St
             r.name = item.getProperty("name", "").toString();
             r.bpm = static_cast<double>(item.getProperty("bpm", 0.0));
             r.key = item.getProperty("key", "").toString();
+            r.durationSec = static_cast<double>(item.getProperty("duration_sec", 0.0));
             r.link = item.getProperty("link", "").toString();
             r.assetUuid = item.getProperty("asset_uuid", "").toString();
             r.previewUrl = item.getProperty("preview_url", "").toString();

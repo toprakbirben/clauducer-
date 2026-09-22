@@ -16,6 +16,7 @@ public:
         juce::String name;
         double bpm = 0.0;
         juce::String key;
+        double durationSec = 0.0; // 0 = unknown
         juce::String link;
         juce::String assetUuid;
         // Always empty for now: confirmed live against Splice's real

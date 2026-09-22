@@ -17,7 +17,15 @@ public:
         if (result != nullptr)
         {
             nameText = result->name;
-            metaText = juce::String(result->bpm, 0) + " BPM   " + result->key;
+            // One-shots have no bpm (0) -- leave it out rather than show "0 BPM".
+            juce::StringArray meta;
+            if (result->bpm > 0.0)
+                meta.add(juce::String(result->bpm, 0) + " BPM");
+            if (result->key.isNotEmpty())
+                meta.add(result->key);
+            if (result->durationSec > 0.0)
+                meta.add(juce::String(result->durationSec, 1) + "s");
+            metaText = meta.joinIntoString("   ");
         }
         repaint();
     }
@@ -52,6 +60,11 @@ public:
 
         g.setColour(juce::Colour(0xffe2e5ec));
         g.drawLine(0.0f, static_cast<float>(getHeight() - 1), static_cast<float>(getWidth()), static_cast<float>(getHeight() - 1));
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override
+    {
+        owner.rowHovered(rowIndex);
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -190,6 +203,12 @@ void ResultsListComponent::togglePreviewForRow(int row)
     setPlayingRow(row);
     if (onPreviewChanged)
         onPreviewChanged(&result);
+}
+
+void ResultsListComponent::rowHovered(int row)
+{
+    if (onRowHovered && row >= 0 && row < static_cast<int>(results.size()))
+        onRowHovered(results[static_cast<size_t>(row)]);
 }
 
 void ResultsListComponent::stopPreview()
