@@ -111,12 +111,12 @@ void ClauducerAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlo
 {
     currentSampleRate = sampleRate;
 
-    {
-        const juce::ScopedLock sl(ringBufferLock);
-        ringBuffer.setSize(2, static_cast<int>(kCaptureBufferSeconds * sampleRate));
-        ringBuffer.clear();
-        ringWritePos = 0;
-    }
+    // Audio isn't running during prepareToPlay, so reallocating is safe --
+    // but an in-progress capture can't survive it.
+    auto state = captureState.load();
+    if (state == CaptureState::armed || state == CaptureState::recording)
+        captureState = CaptureState::stopped;
+    captureBuffer.setSize(2, static_cast<int>(kMaxCaptureSeconds * sampleRate));
 
     juce::ignoreUnused(samplesPerBlock);
 }
@@ -127,27 +127,67 @@ void ClauducerAudioProcessor::releaseResources()
 
 void ClauducerAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    const int numSamples = buffer.getNumSamples();
-    const int numChannels = juce::jmin(buffer.getNumChannels(), 2);
+    // Passthrough -- buffer already holds the input audio and is left
+    // untouched; capture below only reads from it.
+    auto state = captureState.load();
+    if (state != CaptureState::armed && state != CaptureState::recording)
+        return;
 
-    // Mirror input into the ring buffer for later capture. Never blocks the
-    // audio thread: if a capture-in-progress holds the lock, this block is
-    // simply not mirrored (rare -- capture is a brief, user-initiated action).
+    const int numSamples = buffer.getNumSamples();
+    auto* playHead = getPlayHead();
+    const auto position = playHead != nullptr ? playHead->getPosition() : juce::Optional<juce::AudioPlayHead::PositionInfo>();
+    const bool playing = position.hasValue() && position->getIsPlaying();
+    hostPlaying = playing;
+
+    if (!playing)
     {
-        const juce::GenericScopedTryLock<juce::CriticalSection> tryLock(ringBufferLock);
-        if (tryLock.isLocked() && ringBuffer.getNumSamples() > 0)
-        {
-            const int ringLength = ringBuffer.getNumSamples();
-            for (int i = 0; i < numSamples; ++i)
-            {
-                const int writeIndex = (ringWritePos + i) % ringLength;
-                for (int ch = 0; ch < numChannels; ++ch)
-                    ringBuffer.setSample(ch, writeIndex, buffer.getSample(ch, i));
-            }
-            ringWritePos = (ringWritePos + numSamples) % ringLength;
-        }
+        if (state == CaptureState::recording)
+            captureState.compare_exchange_strong(state, CaptureState::stopped);
+        return;
     }
-    // Passthrough -- buffer already holds the input audio, leave it untouched.
+
+    int startOffset = 0;
+    if (state == CaptureState::armed)
+    {
+        // Find where the next bar line falls in this block. Hosts without
+        // tempo/position info fall back to 120 BPM, recording from now.
+        const double bpm = position->getBpm().orFallback(120.0);
+        const auto sig = position->getTimeSignature().orFallback(juce::AudioPlayHead::TimeSignature {});
+        const double quartersPerBar = sig.numerator * 4.0 / sig.denominator;
+        const double samplesPerQuarter = 60.0 / bpm * currentSampleRate;
+
+        double quartersToNextBar = 0.0;
+        if (auto ppq = position->getPpqPosition())
+        {
+            const double lastBar = position->getPpqPositionOfLastBarStart().orFallback(std::floor(*ppq / quartersPerBar) * quartersPerBar);
+            const double intoBar = std::fmod(*ppq - lastBar + quartersPerBar, quartersPerBar);
+            if (intoBar > 1.0e-6 && quartersPerBar - intoBar > 1.0e-6)
+                quartersToNextBar = quartersPerBar - intoBar;
+        }
+
+        startOffset = juce::roundToInt(quartersToNextBar * samplesPerQuarter);
+        if (startOffset >= numSamples)
+            return; // bar line is in a later block
+
+        const int samplesPerBar = juce::roundToInt(quartersPerBar * samplesPerQuarter);
+        captureLength = juce::jmin(captureBars.load() * samplesPerBar, captureBuffer.getNumSamples());
+        captureSamplesPerBar = samplesPerBar;
+        captureWritten = 0;
+        if (!captureState.compare_exchange_strong(state, CaptureState::recording))
+            return; // cancelled meanwhile
+    }
+
+    const int written = captureWritten.load();
+    const int toCopy = juce::jmin(numSamples - startOffset, captureLength - written);
+    for (int ch = 0; ch < captureBuffer.getNumChannels(); ++ch)
+        captureBuffer.copyFrom(ch, written, buffer, juce::jmin(ch, buffer.getNumChannels() - 1), startOffset, toCopy);
+    captureWritten = written + toCopy;
+
+    if (written + toCopy >= captureLength)
+    {
+        state = CaptureState::recording;
+        captureState.compare_exchange_strong(state, CaptureState::done);
+    }
 }
 
 juce::AudioProcessorEditor* ClauducerAudioProcessor::createEditor()
@@ -155,31 +195,77 @@ juce::AudioProcessorEditor* ClauducerAudioProcessor::createEditor()
     return new ClauducerAudioProcessorEditor(*this);
 }
 
-juce::String ClauducerAudioProcessor::captureReferenceToTempFile(double seconds)
+void ClauducerAudioProcessor::startBarCapture(int bars, const juce::String& prompt)
 {
-    juce::AudioBuffer<float> snapshot;
-    int channels = 0;
+    if (captureState.load() != CaptureState::idle)
+        return;
+    captureBars = bars;
+    capturePrompt = prompt;
+    lastCaptureStatus = {};
+    captureState = CaptureState::armed;
+    startTimerHz(20);
+    timerCallback(); // report the initial status right away
+}
 
+void ClauducerAudioProcessor::cancelBarCapture()
+{
+    stopTimer();
+    captureState = CaptureState::idle;
+}
+
+void ClauducerAudioProcessor::timerCallback()
+{
+    const auto report = [this](const juce::String& status)
     {
-        const juce::GenericScopedTryLock<juce::CriticalSection> tryLock(ringBufferLock);
-        if (!tryLock.isLocked() || ringBuffer.getNumSamples() == 0)
-            return {};
+        if (status == lastCaptureStatus)
+            return;
+        lastCaptureStatus = status;
+        listeners.call([&](SearchListener& l) { l.captureStatus(status); });
+    };
 
-        channels = ringBuffer.getNumChannels();
-        const int ringLength = ringBuffer.getNumSamples();
-        const int numToCopy = juce::jmin(ringLength, static_cast<int>(seconds * currentSampleRate));
-        snapshot.setSize(channels, numToCopy);
+    switch (captureState.load())
+    {
+        case CaptureState::idle:
+            stopTimer();
+            break;
 
-        // Ring buffer's oldest sample we want is (writePos - numToCopy), read forward from there.
-        const int startIndex = ((ringWritePos - numToCopy) % ringLength + ringLength) % ringLength;
-        for (int i = 0; i < numToCopy; ++i)
+        case CaptureState::armed:
+            report(hostPlaying.load() ? "Starting on the next bar..." : "Waiting for playback...");
+            break;
+
+        case CaptureState::recording:
         {
-            const int readIndex = (startIndex + i) % ringLength;
-            for (int ch = 0; ch < channels; ++ch)
-                snapshot.setSample(ch, i, ringBuffer.getSample(ch, readIndex));
+            const int samplesPerBar = juce::jmax(1, captureSamplesPerBar.load());
+            const int bar = juce::jmin(captureWritten.load() / samplesPerBar + 1, captureBars.load());
+            report("Listening... bar " + juce::String(bar) + " of " + juce::String(captureBars.load()));
+            break;
+        }
+
+        case CaptureState::done:
+        {
+            stopTimer();
+            auto path = writeCaptureToTempFile(captureWritten.load());
+            captureState = CaptureState::idle;
+            if (path.isEmpty())
+                listeners.call([](SearchListener& l) { l.searchFailed("Couldn't write the captured audio to a temp file."); });
+            else
+                runSearch(path, capturePrompt);
+            break;
+        }
+
+        case CaptureState::stopped:
+        {
+            stopTimer();
+            captureState = CaptureState::idle;
+            const auto message = "Playback stopped before " + juce::String(captureBars.load()) + " bars were recorded.";
+            listeners.call([&](SearchListener& l) { l.searchFailed(message); });
+            break;
         }
     }
+}
 
+juce::String ClauducerAudioProcessor::writeCaptureToTempFile(int numSamples)
+{
     auto tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
                         .getChildFile("clauducer_capture_" + juce::String(juce::Time::currentTimeMillis()) + ".wav");
 
@@ -189,12 +275,12 @@ juce::String ClauducerAudioProcessor::captureReferenceToTempFile(double seconds)
         return {};
 
     std::unique_ptr<juce::AudioFormatWriter> writer(
-        wavFormat.createWriterFor(outputStream.get(), currentSampleRate, static_cast<unsigned>(channels), 16, {}, 0));
+        wavFormat.createWriterFor(outputStream.get(), currentSampleRate, static_cast<unsigned>(captureBuffer.getNumChannels()), 16, {}, 0));
     if (writer == nullptr)
         return {};
 
     outputStream.release(); // writer now owns it
-    writer->writeFromAudioSampleBuffer(snapshot, 0, snapshot.getNumSamples());
+    writer->writeFromAudioSampleBuffer(captureBuffer, 0, numSamples);
     writer.reset(); // flush
 
     return tempFile.getFullPathName();

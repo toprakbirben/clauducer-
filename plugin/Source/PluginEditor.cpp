@@ -27,7 +27,7 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     promptLabel.setColour(juce::Label::textColourId, kTextPrimary);
     addAndMakeVisible(promptLabel);
 
-    promptEditor.setMultiLine(false);
+    promptEditor.setMultiLine(true, true); // wraps inside the taller field; Return still doesn't add newlines
     promptEditor.setLookAndFeel(&promptEditorLookAndFeel);
     promptEditor.setFont(appFont(17.0f));
     promptEditor.setColour(juce::TextEditor::backgroundColourId, kFieldBackground);
@@ -37,8 +37,24 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     promptEditor.onTextChange = [this] { captureButton.setLocked(false); };
     addAndMakeVisible(promptEditor);
 
+    audioDropZone.onClick = [this] { chooseReferenceFile(); };
+    audioDropZone.onFileDropped = [this](const juce::File& file) { setReferenceFile(file); };
+    audioDropZone.onClear = [this] { clearReferenceFile(); };
+    addAndMakeVisible(audioDropZone);
+
     captureButton.onClick = [this] { onCaptureButtonClicked(); };
     addAndMakeVisible(captureButton);
+
+    for (auto* b : { &fourBarsButton, &eightBarsButton })
+    {
+        b->setClickingTogglesState(true);
+        b->setRadioGroupId(1);
+        addChildComponent(b);
+        b->setVisible(!isStandalone);
+    }
+    fourBarsButton.setToggleState(true, juce::dontSendNotification);
+    fourBarsButton.setConnectedEdges(juce::Button::ConnectedOnRight);
+    eightBarsButton.setConnectedEdges(juce::Button::ConnectedOnLeft);
 
     statusLabel.setFont(appFont(14.0f));
     statusLabel.setJustificationType(juce::Justification::centred);
@@ -77,7 +93,7 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     setFocusedView(false, false);
 
     if (isStandalone)
-        setStatus("Drop an audio file here, or click the button to choose one.", false);
+        setStatus("Drop an audio file on the box, or click it to choose one.", false);
 
     loginOverlay.check();
 }
@@ -130,15 +146,25 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
     auto area = bounds;
     auto promptLabelBounds = area.removeFromTop(26);
     area.removeFromTop(4);
-    auto promptEditorBounds = area.removeFromTop(52);
+    auto promptRow = area.removeFromTop(120);
+    constexpr int kDropZoneWidth = 96;
+    constexpr int kDropZoneGap = 6;
+    auto audioDropZoneBounds = promptRow.removeFromRight(kDropZoneWidth);
+    promptRow.removeFromRight(kDropZoneGap);
+    auto promptEditorBounds = promptRow;
     area.removeFromTop(12);
     constexpr int buttonSize = 200;
     auto captureButtonBounds = area.removeFromTop(buttonSize + 8).withSizeKeepingCentre(buttonSize, buttonSize);
+    auto barsRow = isStandalone ? juce::Rectangle<int>() : area.removeFromTop(24).withSizeKeepingCentre(140, 24);
+    auto fourBarsBounds = barsRow.removeFromLeft(barsRow.getWidth() / 2);
+    auto eightBarsBounds = barsRow;
     area.removeFromTop(4);
     auto statusLabelBounds = area.removeFromTop(20);
     area.removeFromTop(6);
-    auto logPanelBounds = area.removeFromTop(120);
-    area.removeFromTop(6);
+    // Hidden (zero height) until the first search, so results get the room.
+    auto logPanelBounds = area.removeFromTop(logPanelShown ? 120 : 0);
+    if (logPanelShown)
+        area.removeFromTop(6);
     auto resultsNormalBounds = area;
 
     // Focus-view layout: back button top-left, results fill nearly everything.
@@ -153,7 +179,10 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
     {
         moveComponent(promptLabel, offscreenAbove(promptLabelBounds), 0.0f, animate);
         moveComponent(promptEditor, offscreenAbove(promptEditorBounds), 0.0f, animate);
+        moveComponent(audioDropZone, offscreenAbove(audioDropZoneBounds), 0.0f, animate);
         moveComponent(captureButton, offscreenAbove(captureButtonBounds), 0.0f, animate);
+        moveComponent(fourBarsButton, offscreenAbove(fourBarsBounds), 0.0f, animate);
+        moveComponent(eightBarsButton, offscreenAbove(eightBarsBounds), 0.0f, animate);
         moveComponent(statusLabel, offscreenAbove(statusLabelBounds), 0.0f, animate);
         moveComponent(logPanel, offscreenAbove(logPanelBounds), 0.0f, animate);
         moveComponent(backButton, backButtonBounds, 1.0f, animate);
@@ -163,9 +192,12 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
     {
         moveComponent(promptLabel, promptLabelBounds, 1.0f, animate);
         moveComponent(promptEditor, promptEditorBounds, 1.0f, animate);
+        moveComponent(audioDropZone, audioDropZoneBounds, 1.0f, animate);
         moveComponent(captureButton, captureButtonBounds, 1.0f, animate);
+        moveComponent(fourBarsButton, fourBarsBounds, 1.0f, animate);
+        moveComponent(eightBarsButton, eightBarsBounds, 1.0f, animate);
         moveComponent(statusLabel, statusLabelBounds, 1.0f, animate);
-        moveComponent(logPanel, logPanelBounds, 1.0f, animate);
+        moveComponent(logPanel, logPanelBounds, logPanelShown ? 1.0f : 0.0f, animate);
         moveComponent(backButton, offscreenAbove(backButtonBounds), 0.0f, animate);
         moveComponent(resultsList, resultsNormalBounds, 1.0f, animate);
         resultsList.stopPreview();
@@ -173,8 +205,11 @@ void ClauducerAudioProcessorEditor::setFocusedView(bool shouldFocus, bool animat
 
     // The faded-out view must not intercept clicks meant for the visible one.
     promptEditor.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
+    audioDropZone.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
     captureButton.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
-    logPanel.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
+    fourBarsButton.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
+    eightBarsButton.setInterceptsMouseClicks(!shouldFocus, !shouldFocus);
+    logPanel.setInterceptsMouseClicks(!shouldFocus && logPanelShown, !shouldFocus && logPanelShown);
     backButton.setInterceptsMouseClicks(shouldFocus, shouldFocus);
 }
 
@@ -196,14 +231,21 @@ void ClauducerAudioProcessorEditor::onCaptureButtonClicked()
         return;
     }
 
-    auto capturedPath = audioProcessor.captureReferenceToTempFile(4.0);
-    if (capturedPath.isEmpty())
+    // A second click while waiting/listening cancels the capture.
+    if (audioProcessor.isCapturing())
     {
-        setStatus("Nothing captured yet -- play some audio through this track first.", true);
+        audioProcessor.cancelBarCapture();
+        setStatus("Capture cancelled.", false);
         return;
     }
 
-    audioProcessor.runSearch(capturedPath, promptEditor.getText());
+    if (referenceFile.existsAsFile())
+    {
+        audioProcessor.runSearch(referenceFile.getFullPathName(), promptEditor.getText());
+        return;
+    }
+
+    audioProcessor.startBarCapture(eightBarsButton.getToggleState() ? 8 : 4, promptEditor.getText());
 }
 
 void ClauducerAudioProcessorEditor::chooseReferenceFile()
@@ -229,13 +271,23 @@ void ClauducerAudioProcessorEditor::setReferenceFile(const juce::File& file)
         return;
     }
     referenceFile = file;
+    audioDropZone.setFileName(file.getFileName());
     captureButton.setLocked(false);
     setStatus(file.getFileName() + (promptEditor.getText().trim().isEmpty() ? " -- now enter a prompt" : " -- click to search"), false);
 }
 
+void ClauducerAudioProcessorEditor::clearReferenceFile()
+{
+    referenceFile = juce::File();
+    audioDropZone.setFileName({});
+    captureButton.setLocked(false);
+    setStatus(isStandalone ? "Drop an audio file on the box, or click it to choose one."
+                           : "Click the circle to listen to this track.", false);
+}
+
 bool ClauducerAudioProcessorEditor::isInterestedInFileDrag(const juce::StringArray& files)
 {
-    return isStandalone && files.size() == 1 && isSupportedAudioFile(juce::File(files[0]));
+    return files.size() == 1 && isSupportedAudioFile(juce::File(files[0]));
 }
 
 void ClauducerAudioProcessorEditor::filesDropped(const juce::StringArray& files, int, int)
@@ -256,7 +308,17 @@ void ClauducerAudioProcessorEditor::searchStarted()
     captureButton.setAnimating(true);
     resultsList.stopPreview();
     logPanel.clear();
+    if (!logPanelShown)
+    {
+        logPanelShown = true;
+        setFocusedView(focusedView, true);
+    }
     setStatus("Analyzing and searching Splice...", false);
+}
+
+void ClauducerAudioProcessorEditor::captureStatus(const juce::String& status)
+{
+    setStatus(status, false);
 }
 
 void ClauducerAudioProcessorEditor::searchLog(const juce::String& line)

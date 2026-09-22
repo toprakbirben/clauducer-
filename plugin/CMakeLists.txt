@@ -37,6 +37,7 @@ target_sources(Clauducer PRIVATE
     Source/LogPanel.cpp
     Source/LoginOverlay.cpp
     Source/PreviewPlayer.cpp
+    Source/AudioDropZone.cpp
 )
 
 juce_add_binary_data(ClauducerFonts SOURCES Source/Fonts/UnicaOne-Regular.ttf)

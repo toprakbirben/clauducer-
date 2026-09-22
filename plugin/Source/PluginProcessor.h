@@ -4,8 +4,8 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "BackendClient.h"
 
-/** Audio-effect plugin: passes track audio through untouched while mirroring
-    it into a ring buffer for on-demand capture. See the plan file for the
+/** Audio-effect plugin: passes track audio through untouched and, on request,
+    records the next few bars of it (bar-aligned via the host playhead). See the plan file for the
     full design -- this class owns capture and the background search call;
     ResultsListComponent (in the editor) owns the per-row drag-and-drop
     gesture and calls downloadForDrag() directly.
@@ -15,7 +15,8 @@
     the sound's Splice webpage, so there is no audio source to play. Dropped
     for v1 rather than built against data that doesn't exist.
 */
-class ClauducerAudioProcessor : public juce::AudioProcessor
+class ClauducerAudioProcessor : public juce::AudioProcessor,
+                                private juce::Timer
 {
 public:
     ClauducerAudioProcessor();
@@ -41,13 +42,16 @@ public:
     void getStateInformation(juce::MemoryBlock&) override {}
     void setStateInformation(const void*, int) override {}
 
-    // --- Capture ---
-    /** Writes the last `seconds` of mirrored track audio to a temp WAV file
-        and returns its path, or an empty string if nothing has been
-        captured yet (e.g. called before any audio has played through).
-        Call from the message thread (UI button handler).
+    // --- Bar capture ---
+    /** Records the next `bars` bars of track audio -- starting on the next
+        bar line once the host transport is playing -- then runs a search
+        with it and `prompt`. Progress arrives via SearchListener::captureStatus;
+        a transport stop mid-recording arrives as searchFailed.
+        Message thread only; ignored if a capture is already in progress.
     */
-    juce::String captureReferenceToTempFile(double seconds);
+    void startBarCapture(int bars, const juce::String& prompt);
+    void cancelBarCapture();
+    bool isCapturing() const { return captureState.load() != CaptureState::idle; }
 
     // --- Search (backend /search, run on a background thread) ---
     // Named SearchListener (not Listener) to avoid colliding with
@@ -60,6 +64,8 @@ public:
         virtual void searchFailed(const juce::String&) {}
         // One human-readable progress line per step (analysis, feeling, query, results).
         virtual void searchLog(const juce::String&) {}
+        // Bar-capture progress, e.g. "Waiting for playback..." / "Listening... bar 2 of 4".
+        virtual void captureStatus(const juce::String&) {}
     };
     void addSearchListener(SearchListener* l) { listeners.add(l); }
     void removeSearchListener(SearchListener* l) { listeners.remove(l); }
@@ -76,18 +82,32 @@ public:
     juce::Result downloadForDrag(const juce::String& assetUuid, const juce::String& name, juce::String& outLocalPath);
 
 private:
-    static constexpr double kCaptureBufferSeconds = 10.0;
+    // 8 bars of 4/4 at 32 BPM -- longer captures are truncated.
+    static constexpr double kMaxCaptureSeconds = 60.0;
+
+    // Polls captureState while a capture is in progress (message thread).
+    void timerCallback() override;
+    juce::String writeCaptureToTempFile(int numSamples);
 
     BackendClient backend;
     juce::ListenerList<SearchListener> listeners;
 
-    // Ring buffer mirroring recent input audio. The audio thread writes
-    // without blocking; captureReferenceToTempFile() (message thread) uses a
-    // try-lock so it never stalls the audio thread -- if the lock is briefly
-    // held, that capture attempt should be retried by the caller.
-    juce::CriticalSection ringBufferLock;
-    juce::AudioBuffer<float> ringBuffer;
-    int ringWritePos = 0;
+    // Capture hand-off between threads: the message thread arms it (idle ->
+    // armed), the audio thread advances it (armed -> recording -> done, or
+    // -> stopped if the transport stops), and the message thread collects
+    // the result (done/stopped -> idle). captureBuffer is only touched by
+    // the audio thread while armed/recording, and by the message thread
+    // otherwise, so it needs no lock.
+    enum class CaptureState { idle, armed, recording, done, stopped };
+    std::atomic<CaptureState> captureState { CaptureState::idle };
+    juce::AudioBuffer<float> captureBuffer; // preallocated in prepareToPlay
+    std::atomic<int> captureBars { 4 };
+    std::atomic<int> captureSamplesPerBar { 0 };
+    std::atomic<int> captureWritten { 0 };
+    std::atomic<bool> hostPlaying { false };
+    int captureLength = 0; // audio thread only
+    juce::String capturePrompt; // message thread only
+    juce::String lastCaptureStatus; // message thread only
     double currentSampleRate = 44100.0;
 
     class SearchThread;
