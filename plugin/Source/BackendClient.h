@@ -56,8 +56,25 @@ public:
     */
     juce::Result download(const juce::String& assetUuid, const juce::String& name, juce::String& outLocalPath);
 
+    struct AuthStatus
+    {
+        bool authorized = false;
+        bool loginInProgress = false;
+        juce::String loginError; // last failed login attempt, if any
+    };
+
+    /** GET /auth/status. Fails only if the backend is unreachable or errors. */
+    juce::Result authStatus(AuthStatus& out);
+
+    /** POST /auth/login: the backend opens the browser OAuth flow and returns
+        immediately -- poll authStatus() until authorized. */
+    juce::Result startLogin();
+
 private:
     juce::String baseUrl;
 
     juce::Result postJson(const juce::String& path, const juce::var& body, juce::var& outResponse);
+    juce::Result getJson(const juce::String& path, juce::var& outResponse);
+    juce::Result sendRequest(const juce::URL& url, const juce::String& path, bool isPost, int timeoutMs,
+                             juce::var& outResponse);
 };

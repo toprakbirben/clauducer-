@@ -6,6 +6,7 @@
 #include "CircularCaptureButton.h"
 #include "RoundedLookAndFeel.h"
 #include "LogPanel.h"
+#include "LoginOverlay.h"
 
 /** Top-level plugin UI. Two views animated between with juce::ComponentAnimator:
       - Search view: prompt field + big circular capture button.
@@ -47,6 +48,8 @@ private:
     void chooseReferenceFile();
     void setReferenceFile(const juce::File& file);
     void setStatus(const juce::String& text, bool isError);
+    // A 401 from the backend means the Splice token is gone -- re-check and show the login overlay.
+    void recheckAuthIfUnauthorized(const juce::String& errorMessage);
 
     // Lays out (or animates towards, if animate is true) either the search
     // view or the focus view, and toggles which components can receive
@@ -76,6 +79,7 @@ private:
     LogPanel logPanel;
     juce::TextButton backButton { juce::CharPointer_UTF8("\xe2\x86\x90 Back") }; // "← Back"
     ResultsListComponent resultsList;
+    LoginOverlay loginOverlay; // last, so it sits above everything else
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ClauducerAudioProcessorEditor)
 };

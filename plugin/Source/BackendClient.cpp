@@ -14,17 +14,30 @@ juce::Result BackendClient::postJson(const juce::String& path, const juce::var& 
     // /search and /analyze can still make Claude API calls, so keep the
     // generous margin.
     static constexpr int kTimeoutMs = 100000;
+    return sendRequest(url, path, true, kTimeoutMs, outResponse);
+}
 
+juce::Result BackendClient::getJson(const juce::String& path, juce::var& outResponse)
+{
+    // Only used for quick status checks -- fail fast if the backend is down.
+    static constexpr int kTimeoutMs = 5000;
+    return sendRequest(juce::URL(baseUrl + path), path, false, kTimeoutMs, outResponse);
+}
+
+juce::Result BackendClient::sendRequest(const juce::URL& url, const juce::String& path, bool isPost, int timeoutMs,
+                                        juce::var& outResponse)
+{
     int statusCode = 0;
-    auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inPostData)
+    auto options = juce::URL::InputStreamOptions(isPost ? juce::URL::ParameterHandling::inPostData
+                                                        : juce::URL::ParameterHandling::inAddress)
                        .withExtraHeaders("Content-Type: application/json")
-                       .withConnectionTimeoutMs(kTimeoutMs)
+                       .withConnectionTimeoutMs(timeoutMs)
                        .withStatusCode(&statusCode);
 
     auto stream = url.createInputStream(options);
     if (stream == nullptr)
         return juce::Result::fail("Could not reach backend at " + baseUrl + path
-                                   + " within " + juce::String(kTimeoutMs / 1000)
+                                   + " within " + juce::String(timeoutMs / 1000)
                                    + "s -- either it's not running (uvicorn service:app --host 127.0.0.1 --port 8787), "
                                      "or this specific call is taking unusually long.");
 
@@ -108,4 +121,24 @@ juce::Result BackendClient::download(const juce::String& assetUuid, const juce::
         return juce::Result::fail("Backend returned no local_path for downloaded asset " + assetUuid);
 
     return juce::Result::ok();
+}
+
+juce::Result BackendClient::authStatus(AuthStatus& out)
+{
+    juce::var response;
+    auto result = getJson("/auth/status", response);
+    if (result.failed())
+        return result;
+
+    out.authorized = static_cast<bool>(response.getProperty("authorized", false));
+    out.loginInProgress = static_cast<bool>(response.getProperty("login_in_progress", false));
+    const auto error = response.getProperty("error", juce::var());
+    out.loginError = error.isVoid() ? juce::String() : error.toString();
+    return juce::Result::ok();
+}
+
+juce::Result BackendClient::startLogin()
+{
+    juce::var response;
+    return postJson("/auth/login", juce::var(new juce::DynamicObject()), response);
 }

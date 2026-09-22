@@ -49,14 +49,23 @@ ClauducerAudioProcessorEditor::ClauducerAudioProcessorEditor(ClauducerAudioProce
     backButton.onClick = [this] { setFocusedView(false, true); };
     addAndMakeVisible(backButton);
 
-    resultsList.onDragError = [this](const juce::String& message) { setStatus(message, true); };
+    resultsList.onDragError = [this](const juce::String& message)
+    {
+        setStatus(message, true);
+        recheckAuthIfUnauthorized(message);
+    };
     addAndMakeVisible(resultsList);
+
+    loginOverlay.onVisibilityChanged = [this](bool isShowing) { captureButton.setVisible(!isShowing); };
+    addChildComponent(loginOverlay);
 
     setSize(520, 680);
     setFocusedView(false, false);
 
     if (isStandalone)
         setStatus("Drop an audio file here, or click the button to choose one.", false);
+
+    loginOverlay.check();
 }
 
 ClauducerAudioProcessorEditor::~ClauducerAudioProcessorEditor()
@@ -72,6 +81,7 @@ void ClauducerAudioProcessorEditor::paint(juce::Graphics& g)
 void ClauducerAudioProcessorEditor::resized()
 {
     setFocusedView(focusedView, false);
+    loginOverlay.setBounds(getLocalBounds());
 }
 
 void ClauducerAudioProcessorEditor::moveComponent(juce::Component& c, juce::Rectangle<int> targetBounds, float targetAlpha, bool animate)
@@ -249,4 +259,11 @@ void ClauducerAudioProcessorEditor::searchFailed(const juce::String& errorMessag
 {
     captureButton.setAnimating(false);
     setStatus(errorMessage, true);
+    recheckAuthIfUnauthorized(errorMessage);
+}
+
+void ClauducerAudioProcessorEditor::recheckAuthIfUnauthorized(const juce::String& errorMessage)
+{
+    if (errorMessage.contains("Backend error (401)"))
+        loginOverlay.check();
 }
