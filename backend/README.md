@@ -9,7 +9,8 @@ Validates the `analyze → compose query → Splice search` pipeline.
 - `match.py` — combines `analysis.py`'s output with a free-text prompt into
   the arguments for Splice MCP's `describe_a_sound` tool (a natural-language
   query + bpm range). Uses the Claude API to write the query if
-  `ANTHROPIC_API_KEY` is set, otherwise falls back to a deterministic
+  `ANTHROPIC_API_KEY` is set, else a local [Ollama](https://ollama.com) model
+  if `OLLAMA_MODEL` is set, otherwise falls back to a deterministic
   template — no credentials required to run it.
 - `service.py` — Milestone 3: wraps the same pipeline as a long-running local
   FastAPI service (`POST /match`, `POST /search`), so a Max for Live device
@@ -34,7 +35,19 @@ curl -X POST http://127.0.0.1:8787/match -H "Content-Type: application/json" \
 `/match` prints the extracted features and the ready-to-run `describe_a_sound`
 call — no credentials required. `/analyze` returns the features plus a short
 "feeling" (mood) description — written by Claude when `ANTHROPIC_API_KEY` is
-set, otherwise by a deterministic template.
+set, else by a local Ollama model when `OLLAMA_MODEL` is set, otherwise by a
+deterministic template.
+
+Local model (free, no API key; tested with `qwen3.5:4b`):
+
+```bash
+brew install ollama && ollama serve &
+ollama pull qwen3.5:4b
+OLLAMA_MODEL=qwen3.5:4b uvicorn service:app --host 127.0.0.1 --port 8787
+```
+
+Thinking is disabled and the query is constrained to a JSON schema; any
+Ollama failure or over-long answer falls back to the template.
 
 `/search` additionally executes the query against the live Splice catalog by
 calling Splice's `describe_a_sound` MCP tool directly (`splice_auth.call_tool`)

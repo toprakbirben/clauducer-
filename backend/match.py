@@ -13,9 +13,9 @@ backend/README.md. Until that's resolved, the intended flow is: run this
 script, then hand its printed query/bpm range to `describe_a_sound`.
 
 Query composition uses the Claude API when ANTHROPIC_API_KEY is set (richer,
-folds in nuance from the prompt); otherwise it falls back to a deterministic
-template built purely from the extracted features, so this stays runnable
-with zero credentials.
+folds in nuance from the prompt), else a local Ollama model when OLLAMA_MODEL
+is set; otherwise it falls back to a deterministic template built purely from
+the extracted features, so this stays runnable with zero credentials.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.request
 
 from analysis import AudioFeatures, extract_features
 
@@ -39,6 +40,23 @@ Respond with strict JSON: {"query": str, "bpm_min": int (optional), \
 
 
 _CLAUDE_MODEL = "claude-opus-5"
+
+_OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+_OLLAMA_TIMEOUT_SEC = 20  # first call after `ollama serve` loads the model (~5s)
+_MAX_FEELING_CHARS = 300
+
+# Passed as Ollama's `format`: constrains decoding so a small model can't
+# return malformed JSON or unknown keys.
+_QUERY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string"},
+        "type": {"type": "string", "enum": ["loop", "oneshot"]},
+        "bpm_min": {"type": "integer"},
+        "bpm_max": {"type": "integer"},
+    },
+    "required": ["query", "type"],
+}
 
 _FEELING_SYSTEM_PROMPT = """You describe how a piece of reference audio feels \
 to a music producer, given only extracted audio features. Write 1-2 short \
@@ -96,12 +114,60 @@ def _claude_query(features: AudioFeatures, prompt: str) -> dict:
     return json.loads(text)
 
 
+def _ollama_chat(system: str, user: str, fmt: dict | None = None) -> str:
+    body = {
+        "model": os.environ["OLLAMA_MODEL"],
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "stream": False,
+        "think": False,  # thinking-by-default models (qwen3.5) otherwise spend seconds reasoning
+        "keep_alive": "30m",
+        "options": {"temperature": 0.3, "num_predict": 200},
+    }
+    if fmt is not None:
+        body["format"] = fmt
+    request = urllib.request.Request(
+        f"{_OLLAMA_URL}/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(request, timeout=_OLLAMA_TIMEOUT_SEC) as response:
+        text = json.load(response)["message"]["content"].strip()
+    if not text:
+        raise ValueError("empty response")
+    return text
+
+
+def _ollama_query(features: AudioFeatures, prompt: str) -> dict:
+    user_content = (
+        f"User prompt: {prompt}\n\nExtracted audio features:\n"
+        f"{json.dumps(features.__dict__, indent=2)}"
+    )
+    return _checked_query(json.loads(_ollama_chat(_SYSTEM_PROMPT, user_content, _QUERY_SCHEMA)), features)
+
+
+def _checked_query(result: dict, features: AudioFeatures) -> dict:
+    """Enforce in code what a small model may ignore in the system prompt."""
+    if not result.get("query", "").strip():
+        raise ValueError("empty query")
+    if features.tempo_bpm < _MIN_PLAUSIBLE_BPM:
+        # No reliable tempo: a bpm range here would be invented and would
+        # silently filter out every matching sustained/one-shot sample.
+        result.pop("bpm_min", None)
+        result.pop("bpm_max", None)
+    elif "bpm_min" in result and "bpm_max" in result and result["bpm_min"] > result["bpm_max"]:
+        result["bpm_min"], result["bpm_max"] = result["bpm_max"], result["bpm_min"]
+    return result
+
+
 def compose_query(features: AudioFeatures, prompt: str) -> dict:
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
             return _claude_query(features, prompt)
         except Exception as exc:  # fall back rather than hard-fail the prototype
             print(f"warning: Claude query composition failed ({exc}); using template", file=sys.stderr)
+    elif os.environ.get("OLLAMA_MODEL"):
+        try:
+            return _ollama_query(features, prompt)
+        except Exception as exc:
+            print(f"warning: Ollama query composition failed ({exc}); using template", file=sys.stderr)
     return _template_query(features, prompt)
 
 
@@ -148,12 +214,28 @@ def _claude_feeling(features: AudioFeatures) -> str:
     return text
 
 
+def _ollama_feeling(features: AudioFeatures) -> str:
+    return _checked_feeling(_ollama_chat(_FEELING_SYSTEM_PROMPT, json.dumps(features.__dict__, indent=2)))
+
+
+def _checked_feeling(text: str) -> str:
+    """Reject rambling output: the plugin shows this as one log line."""
+    if len(text) > _MAX_FEELING_CHARS or text.count("\n") > 1:
+        raise ValueError(f"feeling too long ({len(text)} chars)")
+    return text
+
+
 def describe_feeling(features: AudioFeatures) -> str:
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
             return _claude_feeling(features)
         except Exception as exc:  # fall back rather than hard-fail
             print(f"warning: Claude feeling description failed ({exc}); using template", file=sys.stderr)
+    elif os.environ.get("OLLAMA_MODEL"):
+        try:
+            return _ollama_feeling(features)
+        except Exception as exc:
+            print(f"warning: Ollama feeling description failed ({exc}); using template", file=sys.stderr)
     return _template_feeling(features)
 
 
