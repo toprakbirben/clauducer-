@@ -23,10 +23,18 @@ namespace
 
     constexpr float kSphereRadius = 1.0f;
 
-    // How hard a click's splash boosts amplitude, and how fast that boost
-    // decays back to the idle/searching level.
+    // A click's splash scales with how long it was held: a quick tap gives a
+    // small, sharp ripple; a hold of kFullChargeSeconds or more gives the full
+    // kClickPulseAmplitude with a long, slow decay. kClickPulseAmplitude is
+    // also the cap on any boost (hold swell included) -- kMaxInwardDisplacement
+    // below sizes the disc mask from it.
     constexpr float kClickPulseAmplitude = 0.06f;
-    constexpr float kClickPulseDecaySeconds = 0.35f;
+    constexpr float kTapPulseAmplitude = 0.025f;
+    constexpr float kTapPulseDecaySeconds = 0.18f;
+    constexpr float kFullPulseDecaySeconds = 0.9f;
+    constexpr double kFullChargeSeconds = 1.0;
+    // While held, the surface swells gently towards the release.
+    constexpr float kHoldSwellAmplitude = 0.035f;
 
     // A GL surface composites as opaque against the host window (its alpha
     // channel is ignored), so the square corners around the disc are masked
@@ -135,8 +143,11 @@ void CircularCaptureButton::renderOpenGL()
     // setLocked) only gates whether a click can move the origin or add a
     // fresh splash -- it never stops the animation itself.
     const float pulseAge = (float) juce::jmax(0.0, (now - clickPulseStartMs.load()) / 1000.0);
-    const float pulseBoost = kClickPulseAmplitude * std::exp(-pulseAge / kClickPulseDecaySeconds);
-    sphere->params.amplitude = (searching ? kSearchAmplitude : kIdleAmplitude) + pulseBoost;
+    float boost = pulseAmplitude.load() * std::exp(-pulseAge / pulseDecaySeconds.load());
+    if (holding.load())
+        boost = juce::jmax(boost, kHoldSwellAmplitude * chargeAt(now));
+    sphere->params.amplitude = (searching ? kSearchAmplitude : kIdleAmplitude)
+                             + juce::jmin(boost, kClickPulseAmplitude);
     sphere->update(dt);
 
     const auto scale = (float) glContext.getRenderingScale();
@@ -242,13 +253,28 @@ void CircularCaptureButton::mouseDown(const juce::MouseEvent&)
         return;
 
     // The ripple always originates from the fixed back-left/top point (see
-    // kRippleX/Y/Z) -- a click only adds a splash pulse, it doesn't move
-    // the origin.
-    clickPulseStartMs = juce::Time::getMillisecondCounterHiRes();
+    // kRippleX/Y/Z) -- a press only swells it and its release adds a splash
+    // pulse, it doesn't move the origin.
+    pressStartMs = juce::Time::getMillisecondCounterHiRes();
+    holding = true;
+}
+
+float CircularCaptureButton::chargeAt(double nowMs) const
+{
+    return (float) juce::jlimit(0.0, 1.0, (nowMs - pressStartMs.load()) / 1000.0 / kFullChargeSeconds);
 }
 
 void CircularCaptureButton::mouseUp(const juce::MouseEvent&)
 {
+    if (holding.exchange(false))
+    {
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        const float charge = chargeAt(now);
+        pulseAmplitude = juce::jmap(charge, kTapPulseAmplitude, kClickPulseAmplitude);
+        pulseDecaySeconds = juce::jmap(charge, kTapPulseDecaySeconds, kFullPulseDecaySeconds);
+        clickPulseStartMs = now;
+    }
+
     if (onClick && !animating.load())
     {
         locked = true;

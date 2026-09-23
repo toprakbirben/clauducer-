@@ -9,7 +9,8 @@ Validates the `analyze → compose query → Splice search` pipeline.
 - `match.py` — combines `analysis.py`'s output with a free-text prompt into
   the arguments for Splice MCP's `describe_a_sound` tool (a natural-language
   query + bpm range). Uses the Claude API to write the query if
-  `ANTHROPIC_API_KEY` is set, otherwise falls back to a deterministic
+  `ANTHROPIC_API_KEY` is set, else a local [Ollama](https://ollama.com) model
+  if `OLLAMA_MODEL` is set, otherwise falls back to a deterministic
   template — no credentials required to run it.
 - `service.py` — Milestone 3: wraps the same pipeline as a long-running local
   FastAPI service (`POST /match`, `POST /search`), so a Max for Live device
@@ -32,47 +33,42 @@ curl -X POST http://127.0.0.1:8787/match -H "Content-Type: application/json" \
 ```
 
 `/match` prints the extracted features and the ready-to-run `describe_a_sound`
-call — no credentials required. `/search` additionally executes that query
-against the live Splice catalog by shelling out to the `claude` CLI in
-headless mode (`claude -p ... --output-format json --json-schema ...`). This
-uses whatever the `claude` CLI is already logged in with — **a Claude Pro/Max
-subscription, not a separate pay-per-token API key** — plus the `splice` MCP
-server already registered for that CLI. Check both with:
+call — no credentials required. `/analyze` returns the features plus a short
+"feeling" (mood) description — written by Claude when `ANTHROPIC_API_KEY` is
+set, else by a local Ollama model when `OLLAMA_MODEL` is set, otherwise by a
+deterministic template.
 
+Local model (free, no API key; tested with `qwen3.5:4b`):
+
+```bash
+brew install ollama && ollama serve &
+ollama pull qwen3.5:4b
+OLLAMA_MODEL=qwen3.5:4b uvicorn service:app --host 127.0.0.1 --port 8787
 ```
-claude mcp list          # should show: splice  https://mcp.splice.com/mcp (HTTP) - ✔ Connected
-```
 
-If `splice` isn't listed, register it once (`claude mcp add --transport http splice https://mcp.splice.com/mcp`)
-and complete the browser login the first time you use it interactively —
-same as any other MCP server. Verified end-to-end against the live Splice
-catalog while building this (see "Validated so far" below).
+Thinking is disabled and the query is constrained to a JSON schema; any
+Ollama failure or over-long answer falls back to the template.
 
-`splice_auth.py`'s OAuth login (`python3 splice_auth.py login`, one-time,
-opens a browser) is required for `/download`, which now uses it directly
-(see "`/download`" below). It's not required for `/match` or `/search`,
-which still go through the `claude` CLI/subscription.
+`/search` additionally executes the query against the live Splice catalog by
+calling Splice's `describe_a_sound` MCP tool directly (`splice_auth.call_tool`)
+and parsing its markdown reply — no `claude` CLI involved. Like `/download`,
+it needs the one-time Splice OAuth login, either `python3 splice_auth.py login`
+or from the app: `POST /auth/login` opens the browser, and `GET /auth/status`
+reports `{"authorized": true}` once it completes.
 
 ## Validated so far
 
 Full pipeline (`/search`, not just query composition) run end-to-end against
 a real local file (86.1 BPM, C# minor, dark/thin timbre) with the prompt "a
 warm layering pad to sit under this vocal": `POST /search` extracted
-features, composed a query, ran it through `claude -p` against the real
+features, composed a query, ran it through `claude -p` (the original
+implementation, since replaced by a direct MCP call) against the real
 `splice` MCP server, and returned 10 real, schema-validated results — all at
 90 BPM, mostly in closely related keys (D#/C#/D major, D/F/A minor — several
 off by a relative-major shift rather than an exact minor match). Good enough
 to confirm the whole pipeline works; the query wording could be tuned later
 to weight key-matching harder if exact-key results matter more than they do
 here.
-
-**Cost/usage note:** each `/search` call is a full `claude -p` invocation —
-in testing it used ~55k tokens of fresh context (mostly cache-eligible) and
-took ~25s. Under a subscription this doesn't cost money per call, but it
-does count against your plan's usage/rate limits like any other Claude Code
-session, so calling `/search` on every keystroke or in a tight loop isn't
-free in that sense — fine for a human clicking "Match" occasionally, worth
-knowing before wiring it to something more automated.
 
 ## Standalone Splice authentication (resolved)
 

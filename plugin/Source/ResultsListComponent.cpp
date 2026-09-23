@@ -17,7 +17,15 @@ public:
         if (result != nullptr)
         {
             nameText = result->name;
-            metaText = juce::String(result->bpm, 0) + " BPM   " + result->key;
+            // One-shots have no bpm (0) -- leave it out rather than show "0 BPM".
+            juce::StringArray meta;
+            if (result->bpm > 0.0)
+                meta.add(juce::String(result->bpm, 0) + " BPM");
+            if (result->key.isNotEmpty())
+                meta.add(result->key);
+            if (result->durationSec > 0.0)
+                meta.add(juce::String(result->durationSec, 1) + "s");
+            metaText = meta.joinIntoString("   ");
         }
         repaint();
     }
@@ -30,7 +38,8 @@ public:
 
         g.setColour(juce::Colour(0xff1c2030));
         g.setFont(appFont(15.0f));
-        g.drawFittedText(nameText, area.removeFromTop(area.getHeight() * 2 / 3),
+        const bool isPlaying = rowIndex >= 0 && rowIndex == owner.playingRow;
+        g.drawFittedText(isPlaying ? juce::String(juce::CharPointer_UTF8("\xe2\x96\xb6 ")) + nameText : nameText, area.removeFromTop(area.getHeight() * 2 / 3),
                           juce::Justification::centredLeft, 1);
 
         // Split before drawing either, so the hint can never overlap the
@@ -38,19 +47,24 @@ public:
         auto hintArea = area.removeFromRight(110);
 
         g.setColour(juce::Colour(0xff5a6072));
-        g.setFont(juce::Font(12.0f));
+        g.setFont(juce::FontOptions(12.0f));
         g.drawFittedText(metaText, area, juce::Justification::centredLeft, 1);
 
         // Discoverability hint: dragging the row onto an Ableton track
         // downloads it (spending a Splice credit) -- not obvious just from
         // the cursor alone, so spell it out.
         g.setColour(juce::Colour(0xff8a90a0));
-        g.setFont(juce::Font(11.0f, juce::Font::italic));
+        g.setFont(juce::FontOptions(11.0f, juce::Font::italic));
         g.drawFittedText(juce::CharPointer_UTF8("drag to add \xe2\x86\x92"), hintArea,
                           juce::Justification::centredRight, 1);
 
         g.setColour(juce::Colour(0xffe2e5ec));
         g.drawLine(0.0f, static_cast<float>(getHeight() - 1), static_cast<float>(getWidth()), static_cast<float>(getHeight() - 1));
+    }
+
+    void mouseEnter(const juce::MouseEvent&) override
+    {
+        owner.rowHovered(rowIndex);
     }
 
     void mouseDown(const juce::MouseEvent& e) override
@@ -75,9 +89,9 @@ public:
     void mouseUp(const juce::MouseEvent&) override
     {
         // A plain click (mouse went up without ever crossing the drag
-        // threshold above) opens the sound's Splice webpage instead.
+        // threshold above) plays/stops the sound's preview instead.
         if (!dragStarted)
-            owner.openWebpageForRow(rowIndex);
+            owner.togglePreviewForRow(rowIndex);
     }
 
 private:
@@ -101,6 +115,7 @@ ResultsListComponent::ResultsListComponent(ClauducerAudioProcessor& processorIn)
 
 void ResultsListComponent::setResults(std::vector<BackendClient::SearchResult> newResults)
 {
+    stopPreview();
     results = std::move(newResults);
     listBox.updateContent();
     listBox.repaint();
@@ -173,12 +188,42 @@ void ResultsListComponent::startDragForRow(int row, juce::Component* dragSourceC
     container->performExternalDragDropOfFiles({ localPath }, false, dragSourceComponent);
 }
 
-void ResultsListComponent::openWebpageForRow(int row)
+void ResultsListComponent::togglePreviewForRow(int row)
 {
     if (row < 0 || row >= static_cast<int>(results.size()))
         return;
 
-    const auto& link = results[static_cast<size_t>(row)].link;
-    if (link.isNotEmpty())
-        juce::URL(link).launchInDefaultBrowser();
+    const auto& result = results[static_cast<size_t>(row)];
+    if (row == playingRow || result.link.isEmpty())
+    {
+        stopPreview();
+        return;
+    }
+
+    setPlayingRow(row);
+    if (onPreviewChanged)
+        onPreviewChanged(&result);
+}
+
+void ResultsListComponent::rowHovered(int row)
+{
+    if (onRowHovered && row >= 0 && row < static_cast<int>(results.size()))
+        onRowHovered(results[static_cast<size_t>(row)]);
+}
+
+void ResultsListComponent::stopPreview()
+{
+    if (playingRow < 0)
+        return;
+
+    setPlayingRow(-1);
+    if (onPreviewChanged)
+        onPreviewChanged(nullptr);
+}
+
+void ResultsListComponent::setPlayingRow(int row)
+{
+    playingRow = row;
+    listBox.updateContent();
+    listBox.repaint();
 }

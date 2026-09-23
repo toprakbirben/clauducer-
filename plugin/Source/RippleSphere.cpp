@@ -232,8 +232,8 @@ void RippleSphere::buildMesh(int stacks, int slices)
     std::vector<float>    uvs;
     std::vector<unsigned> indices;
 
-    uvs.reserve(static_cast<size_t>(stacks + 1) * (slices + 1) * 2);
-    indices.reserve(static_cast<size_t>(stacks) * slices * 6);
+    uvs.reserve(static_cast<size_t>(stacks + 1) * static_cast<size_t>(slices + 1) * 2);
+    indices.reserve(static_cast<size_t>(stacks) * static_cast<size_t>(slices) * 6);
 
     for (int i = 0; i <= stacks; ++i) {
         float v = static_cast<float>(i) / static_cast<float>(stacks);
@@ -282,7 +282,7 @@ void RippleSphere::buildMesh(int stacks, int slices)
                  indices.data(), GL_STATIC_DRAW);
 
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
 
     glBindVertexArray(0);
 }

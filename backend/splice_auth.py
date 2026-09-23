@@ -112,6 +112,10 @@ def _load_tokens() -> dict:
         return json.load(f)
 
 
+class LoginError(Exception):
+    """The browser OAuth flow did not complete."""
+
+
 def login() -> None:
     metadata = _discover()
     client_id = _register_client(metadata)
@@ -138,9 +142,9 @@ def login() -> None:
     result = _await_callback()
 
     if result.get("state") != state:
-        sys.exit("error: OAuth state mismatch (possible CSRF or stale callback); aborting")
+        raise LoginError("OAuth state mismatch (possible CSRF or stale callback); aborting")
     if "code" not in result:
-        sys.exit(f"error: no authorization code returned: {result}")
+        raise LoginError(f"no authorization code returned: {result}")
 
     token_req = urllib.request.Request(
         metadata["token_endpoint"],
@@ -183,6 +187,17 @@ def refresh() -> dict:
     return merged
 
 
+def is_authorized() -> bool:
+    """True when a token file exists and yields an access token (refreshing if needed)."""
+    if not os.path.exists(TOKEN_PATH):
+        return False
+    try:
+        get_access_token()
+    except Exception:
+        return False
+    return True
+
+
 def get_access_token() -> str:
     tokens = _load_tokens()
     expires_in = tokens.get("expires_in")
@@ -195,13 +210,8 @@ class SpliceAuthError(Exception):
     """The access token was rejected even after a refresh attempt."""
 
 
-def download_asset(asset_uuid: str) -> dict:
-    """Call Splice's `download_asset` MCP tool directly -- no LLM in the loop.
-
-    Deterministic replacement for shelling out to `claude -p` for /download
-    (see backend/README.md, "/download is unreliable"): downloading a
-    specific, already user-clicked asset_uuid is not a judgment call, so it
-    doesn't need one made by an LLM each time.
+def call_tool(name: str, arguments: dict) -> dict:
+    """Call one Splice MCP tool directly and return the raw tools/call result.
 
     Retries once after a token refresh if the server rejects the current
     access token (401), since a token can go stale between requests.
@@ -210,7 +220,7 @@ def download_asset(asset_uuid: str) -> dict:
     try:
         client = MCPClient(f"{ISSUER}/mcp", token)
         client.initialize()
-        result = client.call_tool("download_asset", {"asset_uuid": asset_uuid})
+        return client.call_tool(name, arguments)
     except MCPAuthError:
         try:
             token = refresh()["access_token"]
@@ -219,17 +229,29 @@ def download_asset(asset_uuid: str) -> dict:
         client = MCPClient(f"{ISSUER}/mcp", token)
         client.initialize()
         try:
-            result = client.call_tool("download_asset", {"asset_uuid": asset_uuid})
+            return client.call_tool(name, arguments)
         except MCPAuthError as exc:
             raise SpliceAuthError(f"still unauthorized after refresh: {exc}") from exc
 
-    return extract_tool_result(result)
+
+def download_asset(asset_uuid: str) -> dict:
+    """Call Splice's `download_asset` MCP tool directly -- no LLM in the loop.
+
+    Deterministic replacement for shelling out to `claude -p` for /download
+    (see backend/README.md, "/download is unreliable"): downloading a
+    specific, already user-clicked asset_uuid is not a judgment call, so it
+    doesn't need one made by an LLM each time.
+    """
+    return extract_tool_result(call_tool("download_asset", {"asset_uuid": asset_uuid}))
 
 
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else "login"
     if command == "login":
-        login()
+        try:
+            login()
+        except LoginError as exc:
+            sys.exit(f"error: {exc}")
     elif command == "refresh":
         refresh()
         print("Refreshed.")

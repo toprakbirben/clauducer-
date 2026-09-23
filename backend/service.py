@@ -9,16 +9,23 @@ Endpoints:
                 -> {"features": {...}, "query": {...}}
                 Always available, no credentials required (see match.py).
 
-  POST /search  {"audio_path": str, "prompt": str}
+  POST /analyze {"audio_path": str}
+                -> {"features": {...}, "feeling": str}
+                Extracts features and a 1-2 sentence mood description (Claude
+                when ANTHROPIC_API_KEY is set, otherwise a template).
+
+  POST /search  {"audio_path": str, "prompt": str, "features": {...} (optional)}
                 -> {"features": {...}, "query": {...}, "results": [...]}
                 Additionally runs the composed query against the real Splice
-                catalog by shelling out to the `claude` CLI in headless mode
-                (`claude -p`). This uses whatever auth `claude` is already
-                logged in with -- a Claude Pro/Max subscription, not a
-                separate pay-per-token ANTHROPIC_API_KEY -- and the `splice`
-                MCP server already registered for that CLI (check with
-                `claude mcp list`). Verified working end-to-end against the
-                live Splice catalog while building this.
+                catalog by calling Splice's `describe_a_sound` MCP tool
+                directly (splice_auth.call_tool) and parsing its markdown
+                reply. Pass `features` from a prior /analyze to skip
+                re-analyzing the audio.
+
+  GET  /auth/status -> {"authorized": bool, "login_in_progress": bool, "error": str|null}
+  POST /auth/login  -> {"started": bool}
+                Starts the browser OAuth flow (splice_auth.login) on a
+                background thread and returns immediately; poll /auth/status.
 
   POST /download {"asset_uuid": str, "name": str}
                 -> {"local_path": str}
@@ -44,21 +51,18 @@ Run with: uvicorn service:app --host 127.0.0.1 --port 8787
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import shutil
-import signal
-import subprocess
-import time
+import re
+import threading
 import urllib.request
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 import splice_auth
-from analysis import extract_features
-from match import compose_query
+from analysis import AudioFeatures, extract_features
+from match import compose_query, describe_feeling
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("clauducer")
@@ -67,83 +71,65 @@ app = FastAPI(title="clauducer backend")
 
 DOWNLOAD_DIR = os.path.expanduser(os.environ.get("SPLICE_DOWNLOAD_DIR", "~/Music/Splice Matches"))
 
-_RESULT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "results": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "bpm": {"type": "number"},
-                    "key": {"type": "string"},
-                    "link": {"type": "string"},
-                    "asset_uuid": {"type": "string"},
-                },
-                "required": ["name", "link", "asset_uuid"],
-            },
-        }
-    },
-    "required": ["results"],
-}
+_login_lock = threading.Lock()
+_login_state: dict = {"in_progress": False, "error": None}
 
-def _run_claude_json(prompt: str, allowed_tool: str, schema: dict) -> dict:
-    if shutil.which("claude") is None:
-        raise HTTPException(
-            status_code=501,
-            detail="`claude` CLI not found on PATH. Use /match for the credential-free half of the pipeline.",
-        )
-    log.info("claude CLI: starting (%s)", allowed_tool)
-    start = time.monotonic()
-    # start_new_session so the whole process group (claude + any MCP child
-    # it spawns) can be killed on timeout -- proc.kill() alone only kills
-    # the top-level `claude` process and can leave a hung MCP grandchild
-    # running behind it.
-    proc_handle = subprocess.Popen(
-        [
-            "claude",
-            "-p",
-            prompt,
-            "--output-format",
-            "json",
-            "--allowedTools",
-            allowed_tool,
-            "--permission-prompts",
-            "none",
-            "--no-session-persistence",
-            "--json-schema",
-            json.dumps(schema),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
+
+def _run_login() -> None:
     try:
-        stdout, stderr = proc_handle.communicate(timeout=90)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc_handle.pid, signal.SIGKILL)
-        proc_handle.wait()
-        log.warning("claude CLI: timed out after %.1fs (%s)", time.monotonic() - start, allowed_tool)
-        raise HTTPException(status_code=504, detail="claude CLI timed out")
+        splice_auth.login()
+        _login_state["error"] = None
+    except Exception as exc:
+        log.warning("splice login failed: %s", exc)
+        _login_state["error"] = str(exc)
+    finally:
+        _login_state["in_progress"] = False
 
-    elapsed = time.monotonic() - start
-    log.info("claude CLI: exited %d after %.1fs (%s)", proc_handle.returncode, elapsed, allowed_tool)
 
-    if proc_handle.returncode != 0:
-        raise HTTPException(status_code=502, detail=f"claude CLI failed: {stderr.strip()}")
+_RESULT_BLOCK_RE = re.compile(r"^### \d+\. (.+)$", re.MULTILINE)
+_BPM_RE = re.compile(r"BPM: (\d+(?:\.\d+)?)")
+_KEY_RE = re.compile(r"Key: ([^|\n]+)")
+_DURATION_RE = re.compile(r"Duration: (\d+(?:\.\d+)?)s")
+_LINK_RE = re.compile(r"\*\*Link:\*\* (\S+)")
+_UUID_RE = re.compile(r"\*\*Asset UUID:\*\* (\S+)")
 
-    try:
-        envelope = json.loads(stdout)
-        return envelope["structured_output"]
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise HTTPException(status_code=502, detail=f"unexpected claude CLI output: {exc}")
+
+def _parse_search_results(text: str) -> list[dict]:
+    """Parse describe_a_sound's markdown reply into {name, bpm?, key?, duration_sec?, link, asset_uuid}.
+
+    The tool has no output schema; each hit is a `### N. <file name>` block
+    with `BPM: .. | Key: ..` (both absent for one-shots), `**Link:**` and
+    `**Asset UUID:**` lines. Blocks missing a link or uuid are skipped.
+    """
+    headers = list(_RESULT_BLOCK_RE.finditer(text))
+    results = []
+    for i, header in enumerate(headers):
+        block = text[header.end() : headers[i + 1].start() if i + 1 < len(headers) else len(text)]
+        link, uuid = _LINK_RE.search(block), _UUID_RE.search(block)
+        if not (link and uuid):
+            continue
+        item = {"name": header.group(1).strip(), "link": link.group(1), "asset_uuid": uuid.group(1)}
+        if bpm := _BPM_RE.search(block):
+            item["bpm"] = float(bpm.group(1))
+        if key := _KEY_RE.search(block):
+            item["key"] = key.group(1).strip()
+        if duration := _DURATION_RE.search(block):
+            item["duration_sec"] = float(duration.group(1))
+        results.append(item)
+    return results
 
 
 class MatchRequest(BaseModel):
     audio_path: str
     prompt: str
+
+
+class AnalyzeRequest(BaseModel):
+    audio_path: str
+
+
+class SearchRequest(MatchRequest):
+    features: dict | None = None
 
 
 class DownloadRequest(BaseModel):
@@ -161,20 +147,58 @@ def match(req: MatchRequest) -> dict:
     return {"features": features.__dict__, "query": query}
 
 
+@app.get("/auth/status")
+def auth_status() -> dict:
+    return {
+        "authorized": splice_auth.is_authorized(),
+        "login_in_progress": _login_state["in_progress"],
+        "error": _login_state["error"],
+    }
+
+
+@app.post("/auth/login")
+def auth_login() -> dict:
+    with _login_lock:
+        if _login_state["in_progress"]:
+            return {"started": False}
+        _login_state["in_progress"] = True
+        _login_state["error"] = None
+    threading.Thread(target=_run_login, daemon=True).start()
+    return {"started": True}
+
+
+@app.post("/analyze")
+def analyze(req: AnalyzeRequest) -> dict:
+    try:
+        features = extract_features(req.audio_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"could not analyze audio: {exc}")
+    return {"features": features.__dict__, "feeling": describe_feeling(features)}
+
+
 @app.post("/search")
-def search(req: MatchRequest) -> dict:
-    features = extract_features(req.audio_path)
+def search(req: SearchRequest) -> dict:
+    try:
+        features = AudioFeatures(**req.features) if req.features else extract_features(req.audio_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"could not analyze audio: {exc}")
     query = compose_query(features, req.prompt)
 
-    call_args = f"query={query['query']!r}, type={query['type']!r}"
+    args = {"query": query["query"], "type": query.get("type", "loop")}
     if "bpm_min" in query and "bpm_max" in query:
-        call_args += f", bpm_min={query['bpm_min']}, bpm_max={query['bpm_max']}"
-    prompt = (
-        f"Use the splice MCP tool describe_a_sound to search with {call_args}. "
-        "Return only the results."
-    )
-    output = _run_claude_json(prompt, "mcp__splice__describe_a_sound", _RESULT_SCHEMA)
-    return {"features": features.__dict__, "query": query, "results": output["results"]}
+        args["bpm_min"], args["bpm_max"] = query["bpm_min"], query["bpm_max"]
+    try:
+        output = splice_auth.call_tool("describe_a_sound", args)
+    except splice_auth.SpliceAuthError as exc:
+        raise HTTPException(status_code=401, detail=f"Splice authentication failed: {exc}")
+    except FileNotFoundError:
+        raise HTTPException(status_code=401, detail="Not logged in to Splice")
+    except Exception as exc:
+        log.warning("search: describe_a_sound failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Splice search failed: {exc}")
+
+    text = "".join(b.get("text", "") for b in output.get("content", []) if b.get("type") == "text")
+    return {"features": features.__dict__, "query": query, "results": _parse_search_results(text)}
 
 
 @app.post("/download")

@@ -9,23 +9,35 @@ juce::Result BackendClient::postJson(const juce::String& path, const juce::var& 
 
     // On macOS this backs NSMutableURLRequest.timeoutInterval, which is the
     // total request timeout, not just the TCP handshake -- confirmed live
-    // that a 15s value here was aborting /search before the backend's own
-    // claude-CLI-backed search (which can legitimately take up to 90s, see
-    // backend/service.py) finished, surfacing as a false "backend
-    // unreachable" error even though the backend was running the whole
-    // time. 100s gives margin over that 90s ceiling.
+    // that a 15s value here was aborting /search (then backed by the claude
+    // CLI, up to 90s) and surfacing as a false "backend unreachable" error.
+    // /search and /analyze can still make Claude API calls, so keep the
+    // generous margin.
     static constexpr int kTimeoutMs = 100000;
+    return sendRequest(url, path, true, kTimeoutMs, outResponse);
+}
 
+juce::Result BackendClient::getJson(const juce::String& path, juce::var& outResponse)
+{
+    // Only used for quick status checks -- fail fast if the backend is down.
+    static constexpr int kTimeoutMs = 5000;
+    return sendRequest(juce::URL(baseUrl + path), path, false, kTimeoutMs, outResponse);
+}
+
+juce::Result BackendClient::sendRequest(const juce::URL& url, const juce::String& path, bool isPost, int timeoutMs,
+                                        juce::var& outResponse)
+{
     int statusCode = 0;
-    auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inPostData)
+    auto options = juce::URL::InputStreamOptions(isPost ? juce::URL::ParameterHandling::inPostData
+                                                        : juce::URL::ParameterHandling::inAddress)
                        .withExtraHeaders("Content-Type: application/json")
-                       .withConnectionTimeoutMs(kTimeoutMs)
+                       .withConnectionTimeoutMs(timeoutMs)
                        .withStatusCode(&statusCode);
 
     auto stream = url.createInputStream(options);
     if (stream == nullptr)
         return juce::Result::fail("Could not reach backend at " + baseUrl + path
-                                   + " within " + juce::String(kTimeoutMs / 1000)
+                                   + " within " + juce::String(timeoutMs / 1000)
                                    + "s -- either it's not running (uvicorn service:app --host 127.0.0.1 --port 8787), "
                                      "or this specific call is taking unusually long.");
 
@@ -45,11 +57,29 @@ juce::Result BackendClient::postJson(const juce::String& path, const juce::var& 
     return juce::Result::ok();
 }
 
-juce::Result BackendClient::search(const juce::String& audioPath, const juce::String& prompt, SearchResponse& out)
+juce::Result BackendClient::analyze(const juce::String& audioPath, AnalyzeResponse& out)
+{
+    auto* body = new juce::DynamicObject();
+    body->setProperty("audio_path", audioPath);
+
+    juce::var response;
+    auto result = postJson("/analyze", juce::var(body), response);
+    if (result.failed())
+        return result;
+
+    out.features = response.getProperty("features", juce::var());
+    out.feeling = response.getProperty("feeling", "").toString();
+    return juce::Result::ok();
+}
+
+juce::Result BackendClient::search(const juce::String& audioPath, const juce::String& prompt, SearchResponse& out,
+                                   const juce::var& features)
 {
     auto* body = new juce::DynamicObject();
     body->setProperty("audio_path", audioPath);
     body->setProperty("prompt", prompt);
+    if (features.isObject())
+        body->setProperty("features", features);
 
     juce::var response;
     auto result = postJson("/search", juce::var(body), response);
@@ -57,6 +87,7 @@ juce::Result BackendClient::search(const juce::String& audioPath, const juce::St
         return result;
 
     out.results.clear();
+    out.query = response.getProperty("query", juce::var()).getProperty("query", "").toString();
     if (auto* resultsArray = response.getProperty("results", juce::var()).getArray())
     {
         for (auto& item : *resultsArray)
@@ -65,6 +96,7 @@ juce::Result BackendClient::search(const juce::String& audioPath, const juce::St
             r.name = item.getProperty("name", "").toString();
             r.bpm = static_cast<double>(item.getProperty("bpm", 0.0));
             r.key = item.getProperty("key", "").toString();
+            r.durationSec = static_cast<double>(item.getProperty("duration_sec", 0.0));
             r.link = item.getProperty("link", "").toString();
             r.assetUuid = item.getProperty("asset_uuid", "").toString();
             r.previewUrl = item.getProperty("preview_url", "").toString();
@@ -90,4 +122,24 @@ juce::Result BackendClient::download(const juce::String& assetUuid, const juce::
         return juce::Result::fail("Backend returned no local_path for downloaded asset " + assetUuid);
 
     return juce::Result::ok();
+}
+
+juce::Result BackendClient::authStatus(AuthStatus& out)
+{
+    juce::var response;
+    auto result = getJson("/auth/status", response);
+    if (result.failed())
+        return result;
+
+    out.authorized = static_cast<bool>(response.getProperty("authorized", false));
+    out.loginInProgress = static_cast<bool>(response.getProperty("login_in_progress", false));
+    const auto error = response.getProperty("error", juce::var());
+    out.loginError = error.isVoid() ? juce::String() : error.toString();
+    return juce::Result::ok();
+}
+
+juce::Result BackendClient::startLogin()
+{
+    juce::var response;
+    return postJson("/auth/login", juce::var(new juce::DynamicObject()), response);
 }

@@ -34,12 +34,16 @@ target_sources(Clauducer PRIVATE
     Source/BackendClient.cpp
     Source/CircularCaptureButton.cpp
     Source/RippleSphere.cpp
+    Source/LogPanel.cpp
+    Source/LoginOverlay.cpp
+    Source/PreviewPlayer.cpp
+    Source/AudioDropZone.cpp
 )
 
 juce_add_binary_data(ClauducerFonts SOURCES Source/Fonts/UnicaOne-Regular.ttf)
 
 target_compile_definitions(Clauducer PUBLIC
-    JUCE_WEB_BROWSER=0
+    JUCE_WEB_BROWSER=1
     JUCE_USE_CURL=1
     JUCE_DISPLAY_SPLASH_SCREEN=0
 )
