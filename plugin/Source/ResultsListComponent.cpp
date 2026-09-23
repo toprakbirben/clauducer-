@@ -47,14 +47,14 @@ public:
         auto hintArea = area.removeFromRight(110);
 
         g.setColour(juce::Colour(0xff5a6072));
-        g.setFont(juce::Font(12.0f));
+        g.setFont(juce::FontOptions(12.0f));
         g.drawFittedText(metaText, area, juce::Justification::centredLeft, 1);
 
         // Discoverability hint: dragging the row onto an Ableton track
         // downloads it (spending a Splice credit) -- not obvious just from
         // the cursor alone, so spell it out.
         g.setColour(juce::Colour(0xff8a90a0));
-        g.setFont(juce::Font(11.0f, juce::Font::italic));
+        g.setFont(juce::FontOptions(11.0f, juce::Font::italic));
         g.drawFittedText(juce::CharPointer_UTF8("drag to add \xe2\x86\x92"), hintArea,
                           juce::Justification::centredRight, 1);
 
