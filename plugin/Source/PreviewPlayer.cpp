@@ -6,7 +6,7 @@ namespace
     // site's in-app navigations (same document).
     const char* const kPageScript = R"JS(
 window.clauducer = (() => {
-  let targetId = '', wantPlay = false, timer = 0;
+  let targetId = '', wantPlay = false, pressedAt = 0, timer = 0;
   const button = () => document.querySelector('button[data-qa="play-button"]');
   const idOf = (url) => (url.match(/\/sample\/([0-9a-f]+)/) || [])[1] || '';
   const isPlaying = () => { const b = button(); return !!b && b.innerText.trim() === 'Pause'; };
@@ -18,7 +18,7 @@ window.clauducer = (() => {
   };
   const tick = (tries) => {
     const b = readyButton();
-    if (b) { if (wantPlay && !isPlaying()) b.click(); wantPlay = false; return; }
+    if (b) { if (wantPlay && !isPlaying()) { b.click(); pressedAt = Date.now(); } wantPlay = false; return; }
     if (tries < 300) timer = setTimeout(() => tick(tries + 1), 50);
     else wantPlay = false;  // gave up after ~15s
   };
@@ -39,8 +39,13 @@ window.clauducer = (() => {
       }
       tick(0);
     },
-    stop() { clearTimeout(timer); wantPlay = false; if (isPlaying()) button().click(); },
-    state() { return isPlaying() ? 'playing' : (wantPlay ? 'pending' : 'idle'); },
+    stop() { clearTimeout(timer); wantPlay = false; pressedAt = 0; if (isPlaying()) button().click(); },
+    // The label only turns to "Pause" once the audio has loaded (~1.5s after
+    // the press), so a recent press still counts as pending.
+    state() {
+      if (isPlaying()) { pressedAt = 0; return 'playing'; }
+      return wantPlay || (pressedAt && Date.now() - pressedAt < 10000) ? 'pending' : 'idle';
+    },
   };
 })();
 )JS";
